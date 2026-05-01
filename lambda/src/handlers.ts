@@ -55,11 +55,51 @@ function audioPlayerState(
     | undefined;
 }
 
+interface QueueState {
+  queue: number[];
+  index: number;
+}
+
+function encodeQueueState(queue: number[], index: number): string {
+  return Buffer.from(JSON.stringify({ queue, index }), "utf8").toString(
+    "base64url",
+  );
+}
+
+function decodeQueueState(token?: string): QueueState | undefined {
+  if (!token) return undefined;
+
+  // Backward compatibility for old tokens that were plain track IDs.
+  if (/^\d+$/.test(token)) {
+    const id = parseInt(token, 10);
+    return Number.isNaN(id) ? undefined : { queue: [id], index: 0 };
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(token, "base64url").toString("utf8"),
+    ) as Partial<QueueState>;
+    if (!Array.isArray(parsed.queue)) return undefined;
+    const queue = parsed.queue
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0);
+    if (!queue.length) return undefined;
+    const index = Number(parsed.index);
+    if (!Number.isInteger(index) || index < 0 || index >= queue.length) {
+      return undefined;
+    }
+    return { queue, index };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Build an AudioPlayer.Play directive for a single track */
 function playDirective(
   track: lms.LmsTrack,
   behaviour: "REPLACE_ALL" | "ENQUEUE" | "REPLACE_ENQUEUED",
   previousToken?: string,
+  token?: string,
 ): interfaces.audioplayer.PlayDirective {
   return {
     type: "AudioPlayer.Play",
@@ -67,7 +107,7 @@ function playDirective(
     audioItem: {
       stream: {
         url: track.stream_url,
-        token: String(track.id),
+        token: token ?? String(track.id),
         expectedPreviousToken:
           behaviour === "ENQUEUE" ? previousToken : undefined,
         offsetInMilliseconds: 0,
@@ -85,12 +125,6 @@ function playDirective(
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Session attribute key for album queue
-// ---------------------------------------------------------------------------
-const SESSION_QUEUE = "trackQueue";
-const SESSION_QUEUE_INDEX = "trackQueueIndex";
 
 // ---------------------------------------------------------------------------
 // LaunchRequestHandler
@@ -220,16 +254,12 @@ export const PlayAlbumIntentHandler: RequestHandler = {
         .speak(`The album ${album.title} appears to have no tracks.`)
         .getResponse();
     }
-
-    // Persist the full queue in session so PlaybackNearlyFinished can enqueue
-    const attrs = input.attributesManager.getSessionAttributes();
-    attrs[SESSION_QUEUE] = tracks.map((t) => t.id);
-    attrs[SESSION_QUEUE_INDEX] = 0;
-    input.attributesManager.setSessionAttributes(attrs);
+    const queue = tracks.map((t) => t.id);
+    const token = encodeQueueState(queue, 0);
 
     const response = input.responseBuilder
       .speak(`Playing ${album.title} by ${album.artist}.`)
-      .addDirective(playDirective(tracks[0], "REPLACE_ALL"))
+      .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
@@ -274,15 +304,12 @@ export const PlayArtistIntentHandler: RequestHandler = {
         .speak(`Sorry, I couldn't find any tracks by ${query}.`)
         .getResponse();
     }
-
-    const attrs = input.attributesManager.getSessionAttributes();
-    attrs[SESSION_QUEUE] = tracks.map((t) => t.id);
-    attrs[SESSION_QUEUE_INDEX] = 0;
-    input.attributesManager.setSessionAttributes(attrs);
+    const queue = tracks.map((t) => t.id);
+    const token = encodeQueueState(queue, 0);
 
     const response = input.responseBuilder
       .speak(`Playing music by ${query}.`)
-      .addDirective(playDirective(tracks[0], "REPLACE_ALL"))
+      .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
@@ -299,8 +326,10 @@ export const PlayArtistIntentHandler: RequestHandler = {
 
 export const PauseIntentHandler: RequestHandler = {
   canHandle(input) {
+    const reqType = (input.requestEnvelope.request as any).type as string;
+    if (reqType === "PlaybackController.PauseCommand") return true;
     return (
-      input.requestEnvelope.request.type === "IntentRequest" &&
+      reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name ===
         "AMAZON.PauseIntent"
     );
@@ -315,8 +344,10 @@ export const PauseIntentHandler: RequestHandler = {
 
 export const ResumeIntentHandler: RequestHandler = {
   canHandle(input) {
+    const reqType = (input.requestEnvelope.request as any).type as string;
+    if (reqType === "PlaybackController.PlayCommand") return true;
     return (
-      input.requestEnvelope.request.type === "IntentRequest" &&
+      reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name ===
         "AMAZON.ResumeIntent"
     );
@@ -324,13 +355,13 @@ export const ResumeIntentHandler: RequestHandler = {
   async handle(input): Promise<Response> {
     // Resume Alexa's own AudioPlayer at the offset it paused at
     const ap = audioPlayerState(input);
-    const token = ap?.token;
-    if (!token) {
+    const state = decodeQueueState(ap?.token);
+    if (!state) {
       return input.responseBuilder.speak("Nothing to resume.").getResponse();
     }
 
     const offsetMs = ap?.offsetInMilliseconds ?? 0;
-    const trackId = parseInt(token, 10);
+    const trackId = state.queue[state.index];
 
     // Fetch track metadata (needed for signed stream URL)
     let track: lms.LmsTrack;
@@ -340,7 +371,12 @@ export const ResumeIntentHandler: RequestHandler = {
       return input.responseBuilder.speak("Nothing to resume.").getResponse();
     }
 
-    const directive = playDirective(track, "REPLACE_ALL");
+    const directive = playDirective(
+      track,
+      "REPLACE_ALL",
+      undefined,
+      encodeQueueState(state.queue, state.index),
+    );
     (directive.audioItem!.stream as any).offsetInMilliseconds = offsetMs;
 
     const response = input.responseBuilder
@@ -383,24 +419,31 @@ export const StopIntentHandler: RequestHandler = {
 
 export const NextIntentHandler: RequestHandler = {
   canHandle(input) {
+    const reqType = (input.requestEnvelope.request as any).type as string;
+    if (reqType === "PlaybackController.NextCommand") return true;
     return (
-      input.requestEnvelope.request.type === "IntentRequest" &&
+      reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name === "AMAZON.NextIntent"
     );
   },
   async handle(input): Promise<Response> {
-    const attrs = input.attributesManager.getSessionAttributes();
-    const queue: number[] = attrs[SESSION_QUEUE] ?? [];
-    const idx: number = (attrs[SESSION_QUEUE_INDEX] ?? 0) + 1;
+    const state = decodeQueueState(audioPlayerState(input)?.token);
+    if (!state) {
+      return input.responseBuilder
+        .speak("There isn't an active queue to skip.")
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+    const idx = state.index + 1;
 
-    if (idx >= queue.length) {
+    if (idx >= state.queue.length) {
       return input.responseBuilder
         .speak("That's the end of the queue.")
         .withShouldEndSession(true)
         .getResponse();
     }
 
-    const trackId = queue[idx];
+    const trackId = state.queue[idx];
     let track: lms.LmsTrack;
     try {
       track = await lms.getTrack(trackId);
@@ -411,11 +454,15 @@ export const NextIntentHandler: RequestHandler = {
         .getResponse();
     }
 
-    attrs[SESSION_QUEUE_INDEX] = idx;
-    input.attributesManager.setSessionAttributes(attrs);
-
     const response = input.responseBuilder
-      .addDirective(playDirective(track, "REPLACE_ALL"))
+      .addDirective(
+        playDirective(
+          track,
+          "REPLACE_ALL",
+          undefined,
+          encodeQueueState(state.queue, idx),
+        ),
+      )
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
@@ -428,16 +475,23 @@ export const NextIntentHandler: RequestHandler = {
 
 export const PreviousIntentHandler: RequestHandler = {
   canHandle(input) {
+    const reqType = (input.requestEnvelope.request as any).type as string;
+    if (reqType === "PlaybackController.PreviousCommand") return true;
     return (
-      input.requestEnvelope.request.type === "IntentRequest" &&
+      reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name ===
         "AMAZON.PreviousIntent"
     );
   },
   async handle(input): Promise<Response> {
-    const attrs = input.attributesManager.getSessionAttributes();
-    const queue: number[] = attrs[SESSION_QUEUE] ?? [];
-    const idx: number = (attrs[SESSION_QUEUE_INDEX] ?? 0) - 1;
+    const state = decodeQueueState(audioPlayerState(input)?.token);
+    if (!state) {
+      return input.responseBuilder
+        .speak("There isn't an active queue to go back in.")
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+    const idx = state.index - 1;
 
     if (idx < 0) {
       return input.responseBuilder
@@ -446,7 +500,7 @@ export const PreviousIntentHandler: RequestHandler = {
         .getResponse();
     }
 
-    const trackId = queue[idx];
+    const trackId = state.queue[idx];
     let track: lms.LmsTrack;
     try {
       track = await lms.getTrack(trackId);
@@ -457,11 +511,15 @@ export const PreviousIntentHandler: RequestHandler = {
         .getResponse();
     }
 
-    attrs[SESSION_QUEUE_INDEX] = idx;
-    input.attributesManager.setSessionAttributes(attrs);
-
     const response = input.responseBuilder
-      .addDirective(playDirective(track, "REPLACE_ALL"))
+      .addDirective(
+        playDirective(
+          track,
+          "REPLACE_ALL",
+          undefined,
+          encodeQueueState(state.queue, idx),
+        ),
+      )
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
@@ -553,17 +611,18 @@ export const AudioPlayerHandlers: RequestHandler[] = [
       input.requestEnvelope.request.type ===
       "AudioPlayer.PlaybackNearlyFinished",
     async handle(input): Promise<Response> {
-      const attrs = input.attributesManager.getSessionAttributes();
-      const queue: number[] = attrs[SESSION_QUEUE] ?? [];
-      const idx: number = (attrs[SESSION_QUEUE_INDEX] ?? 0) + 1;
-
-      if (idx >= queue.length) {
+      const currentToken = (input.requestEnvelope.request as any).token as
+        | string
+        | undefined;
+      const state = decodeQueueState(currentToken);
+      if (!state) {
         return input.responseBuilder.getResponse();
       }
-
-      const currentToken = (input.requestEnvelope.request as any)
-        .token as string;
-      const nextTrackId = queue[idx];
+      const idx = state.index + 1;
+      if (idx >= state.queue.length) {
+        return input.responseBuilder.getResponse();
+      }
+      const nextTrackId = state.queue[idx];
 
       // Fetch track metadata (needed for signed stream_url)
       let next: lms.LmsTrack;
@@ -573,11 +632,10 @@ export const AudioPlayerHandlers: RequestHandler[] = [
         return input.responseBuilder.getResponse();
       }
 
-      attrs[SESSION_QUEUE_INDEX] = idx;
-      input.attributesManager.setSessionAttributes(attrs);
+      const nextToken = encodeQueueState(state.queue, idx);
 
       return input.responseBuilder
-        .addDirective(playDirective(next, "ENQUEUE", currentToken))
+        .addDirective(playDirective(next, "ENQUEUE", currentToken, nextToken))
         .getResponse();
     },
   },

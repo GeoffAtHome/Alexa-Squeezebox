@@ -172,17 +172,17 @@ ask smapi set-skill-enablement \
 
 All endpoints (except `/alexa/stream`) require `?token=<api-token>`.
 
-| Method | Path                                                | Description                                                 |
-| ------ | --------------------------------------------------- | ----------------------------------------------------------- |
-| GET    | `/alexa/search?q=<query>&type=track\|album\|artist` | Search the library                                          |
-| GET    | `/alexa/track/<id>`                                 | Fetch a single track by LMS database ID                     |
-| GET    | `/alexa/album/<id>/tracks`                          | Get all tracks in an album                                  |
-| GET    | `/alexa/nowplaying?player=<id>`                     | Current playback state for a player                         |
-| GET    | `/alexa/control?player=<id>&cmd=<cmd>`              | Send playback command to a player                           |
-| GET    | `/alexa/players`                                    | List all connected LMS players                              |
-| GET    | `/alexa/playback?state=playing\|paused\|stopped&trackId=<id>&offsetMs=<ms>` | Update Alexa shadow playback state (called by Lambda) |
-| GET    | `/alexa/playback/current`                           | Read current Alexa shadow playback state                    |
-| GET    | `/alexa/stream/<id>?exp=<ts>&sig=<hmac>`            | Serve/redirect audio (self-signed URL, no API token needed) |
+| Method | Path                                                                        | Description                                                 |
+| ------ | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| GET    | `/alexa/search?q=<query>&type=track\|album\|artist`                         | Search the library                                          |
+| GET    | `/alexa/track/<id>`                                                         | Fetch a single track by LMS database ID                     |
+| GET    | `/alexa/album/<id>/tracks`                                                  | Get all tracks in an album                                  |
+| GET    | `/alexa/nowplaying?player=<id>`                                             | Current playback state for a player                         |
+| GET    | `/alexa/control?player=<id>&cmd=<cmd>`                                      | Send playback command to a player                           |
+| GET    | `/alexa/players`                                                            | List all connected LMS players                              |
+| GET    | `/alexa/playback?state=playing\|paused\|stopped&trackId=<id>&offsetMs=<ms>` | Update Alexa shadow playback state (called by Lambda)       |
+| GET    | `/alexa/playback/current`                                                   | Read current Alexa shadow playback state                    |
+| GET    | `/alexa/stream/<id>?exp=<ts>&sig=<hmac>`                                    | Serve/redirect audio (self-signed URL, no API token needed) |
 
 Stream URLs are signed with HMAC-SHA1 and expire after `token_ttl` seconds (default 24 hours).
 

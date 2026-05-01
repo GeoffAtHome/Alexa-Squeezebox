@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# TypeScript build output
+lambda/dist/
+
+# ASK CLI build cache (copies source + compiles here)
+.ask/lambda/
+
+# Lambda deployment zip
+*.zip
+
+# Environment / secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db

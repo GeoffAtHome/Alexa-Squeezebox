@@ -1,0 +1,110 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "squeezebox",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PauseIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ResumeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NextIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PreviousIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "PlayTrackIntent",
+          "slots": [
+            {
+              "name": "SearchQuery",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play {SearchQuery}",
+            "play the song {SearchQuery}",
+            "play the track {SearchQuery}",
+            "find {SearchQuery}",
+            "put on {SearchQuery}"
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "slots": [
+            {
+              "name": "SearchQuery",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play the album {SearchQuery}",
+            "play album {SearchQuery}",
+            "put on the album {SearchQuery}",
+            "put on {SearchQuery} album"
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "slots": [
+            {
+              "name": "SearchQuery",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play something by {SearchQuery}",
+            "play music by {SearchQuery}",
+            "play {SearchQuery} music",
+            "put on some {SearchQuery}"
+          ]
+        },
+        {
+          "name": "VolumeIntent",
+          "slots": [
+            {
+              "name": "Volume",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "set the volume to {Volume}",
+            "volume {Volume}",
+            "turn the volume to {Volume}",
+            "set volume {Volume}"
+          ]
+        },
+        {
+          "name": "NowPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what's playing",
+            "what is playing",
+            "what's this",
+            "what's this song",
+            "what track is this"
+          ]
+        }
+      ],
+      "types": []
+    }
+  }
+}

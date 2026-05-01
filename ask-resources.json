@@ -1,0 +1,34 @@
+{
+  "askcliResourcesVersion": "2020-03-31",
+  "profiles": {
+    "default": {
+      "skillMetadata": {
+        "src": "./skill-package"
+      },
+      "code": {
+        "default": {
+          "src": "./lambda",
+          "buildFlow": "npm-standard"
+        }
+      },
+      "skillInfrastructure": {
+        "type": "@ask-cli/lambda-deployer",
+        "userConfig": {
+          "runtime": "nodejs20.x",
+          "handler": "dist/index.handler",
+          "awsRegion": "eu-west-1",
+          "lambda": {
+            "functionName": "alexa-squeezebox",
+            "memorySize": 256,
+            "timeout": 8,
+            "environmentVariables": {
+              "LMS_BASE_URL": "https://lms.yourdomain.com",
+              "LMS_API_TOKEN": "<from-plugin-settings>",
+              "LMS_PLAYER_ID": "<from-alexa-players-endpoint>"
+            }
+          }
+        }
+      }
+    }
+  }
+}

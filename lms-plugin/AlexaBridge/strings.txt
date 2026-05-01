@@ -1,0 +1,23 @@
+PLUGIN_ALEXABRIDGE
+	EN	Alexa Bridge
+
+PLUGIN_ALEXABRIDGE_DESC
+	EN	Exposes a REST API for the Alexa-Squeezebox skill to search the LMS library, generate signed audio stream URLs, and control playback.
+
+PLUGIN_ALEXABRIDGE_SECRET
+	EN	Shared Secret
+
+PLUGIN_ALEXABRIDGE_SECRET_DESC
+	EN	Secret used to sign stream URLs and authenticate Lambda API requests. Use a long random string (32+ characters). After saving, copy the computed API Token below into your Lambda LMS_API_TOKEN environment variable.
+
+PLUGIN_ALEXABRIDGE_TOKEN_TTL
+	EN	Stream URL Lifetime (seconds)
+
+PLUGIN_ALEXABRIDGE_TOKEN_TTL_DESC
+	EN	How long a signed stream URL remains valid. Default is 86400 (24 hours). Minimum 300 (5 minutes).
+
+PLUGIN_ALEXABRIDGE_API_TOKEN
+	EN	Computed API Token
+
+PLUGIN_ALEXABRIDGE_API_TOKEN_DESC
+	EN	Set this value as LMS_API_TOKEN in your Lambda environment variables.

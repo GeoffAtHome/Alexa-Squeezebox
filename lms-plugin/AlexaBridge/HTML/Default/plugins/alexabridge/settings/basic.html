@@ -1,0 +1,24 @@
+[% PROCESS settings/header.html %] [% WRAPPER setting
+title="PLUGIN_ALEXABRIDGE_SECRET" desc="PLUGIN_ALEXABRIDGE_SECRET_DESC" %]
+<input
+  class="stdedit"
+  type="password"
+  name="pref_secret"
+  value="[% prefs.pref_secret | html %]"
+  size="48"
+  autocomplete="new-password"
+/>
+[% END %] [% WRAPPER setting title="PLUGIN_ALEXABRIDGE_TOKEN_TTL"
+desc="PLUGIN_ALEXABRIDGE_TOKEN_TTL_DESC" %]
+<input
+  class="stdedit"
+  type="number"
+  name="pref_token_ttl"
+  value="[% prefs.pref_token_ttl | html %]"
+  min="300"
+  max="604800"
+/>
+[% END %] [% IF api_token %] [% WRAPPER setting
+title="PLUGIN_ALEXABRIDGE_API_TOKEN" desc="PLUGIN_ALEXABRIDGE_API_TOKEN_DESC" %]
+<code>[% api_token | html %]</code>
+[% END %] [% END %] [% PROCESS settings/footer.html %]

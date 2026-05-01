@@ -1,0 +1,52 @@
+[% INCLUDE "header.html" %]
+
+<h1>[% string('PLUGIN_ALEXABRIDGE') %]</h1>
+<p>[% string('PLUGIN_ALEXABRIDGE_DESC') %]</p>
+
+<form method="post" action="[% path %]">
+  <input type="hidden" name="saveSettings" value="1" />
+
+  <table class="settings">
+    <tr>
+      <td class="label">[% string('PLUGIN_ALEXABRIDGE_SECRET') %]</td>
+      <td>
+        <input
+          type="password"
+          name="pref_secret"
+          value="[% pref_secret | html %]"
+          size="48"
+          autocomplete="new-password"
+        />
+        <p class="hint">[% string('PLUGIN_ALEXABRIDGE_SECRET_DESC') %]</p>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="label">[% string('PLUGIN_ALEXABRIDGE_TOKEN_TTL') %]</td>
+      <td>
+        <input
+          type="number"
+          name="pref_token_ttl"
+          value="[% pref_token_ttl | html %]"
+          min="300"
+          max="604800"
+        />
+        <p class="hint">[% string('PLUGIN_ALEXABRIDGE_TOKEN_TTL_DESC') %]</p>
+      </td>
+    </tr>
+
+    [% IF api_token %]
+    <tr>
+      <td class="label">[% string('PLUGIN_ALEXABRIDGE_API_TOKEN') %]</td>
+      <td>
+        <code>[% api_token | html %]</code>
+        <p class="hint">[% string('PLUGIN_ALEXABRIDGE_API_TOKEN_DESC') %]</p>
+      </td>
+    </tr>
+    [% END %]
+  </table>
+
+  <input type="submit" value="[% string('SAVE') %]" />
+</form>
+
+[% INCLUDE "footer.html" %]

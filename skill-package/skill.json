@@ -1,0 +1,49 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-GB": {
+          "name": "Squeezebox",
+          "summary": "Control your Logitech Media Server from Alexa.",
+          "description": "Play music from your Logitech Media Server library on your Alexa device. Search by track, album or artist, control playback, and see album art on your Echo Show.",
+          "examplePhrases": [
+            "Alexa, open squeezebox",
+            "Alexa, ask squeezebox to play the album OK Computer",
+            "Alexa, ask squeezebox to play something by Radiohead"
+          ],
+          "keywords": [
+            "music",
+            "squeezebox",
+            "lms",
+            "logitech media server"
+          ]
+        }
+      },
+      "isAvailableWorldwide": false,
+      "distributionCountries": [
+        "GB",
+        "IE"
+      ],
+      "distributionMode": "PUBLIC",
+      "category": "KNOWLEDGE_AND_TRIVIA",
+      "testingInstructions": "Enable the skill, then say: Alexa, open squeezebox."
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "arn:aws:lambda:eu-west-1:355269253841:function:alexa-squeezebox"
+        },
+        "interfaces": [
+          {
+            "type": "AUDIO_PLAYER"
+          },
+          {
+            "type": "ALEXA_PRESENTATION_APL"
+          }
+        ]
+      }
+    },
+    "manifestVersion": "1.0",
+    "permissions": []
+  }
+}

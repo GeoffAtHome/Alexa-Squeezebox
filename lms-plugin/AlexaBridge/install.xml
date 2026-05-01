@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extensions>
+  <module>Plugins::AlexaBridge::Plugin</module>
+  <description>PLUGIN_ALEXABRIDGE_DESC</description>
+  <creator>Custom</creator>
+  <version>1.0.0</version>
+  <defaultState>enabled</defaultState>
+  <type>2</type>
+  <targetApplication>
+    <minVersion>8.0.0</minVersion>
+    <maxVersion>*</maxVersion>
+    <id>SlimServer</id>
+  </targetApplication>
+  <name>PLUGIN_ALEXABRIDGE</name>
+</extensions>

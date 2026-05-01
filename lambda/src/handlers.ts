@@ -1,0 +1,653 @@
+/**
+ * handlers.ts
+ *
+ * ASK SDK v2 request handlers for the Alexa-Squeezebox skill.
+ *
+ * UK notes:
+ *   - AMAZON.PlayMusicIntent and music-domain built-ins are US-only.
+ *     All music intents here are CUSTOM with AMAZON.SearchQuery slots.
+ *   - AMAZON.MusicAlbum / AMAZON.MusicArtist built-in slots are not
+ *     available in en-GB — SearchQuery is used throughout.
+ *   - AMAZON.PauseIntent, AMAZON.ResumeIntent, AMAZON.NextIntent,
+ *     AMAZON.PreviousIntent, AMAZON.StopIntent ARE available in en-GB.
+ *   - AudioPlayer interface is fully supported in the UK.
+ *   - APL is supported on Echo Show devices in the UK.
+ */
+
+import {
+  HandlerInput,
+  RequestHandler,
+  ErrorHandler as IErrorHandler,
+} from "ask-sdk-core";
+import { Response, interfaces } from "ask-sdk-model";
+import * as lms from "./lmsClient";
+import { buildNowPlayingApl } from "./aplBuilder";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function supportsApl(handlerInput: HandlerInput): boolean {
+  const interfaces =
+    handlerInput.requestEnvelope.context?.System?.device?.supportedInterfaces;
+  return !!interfaces?.["Alexa.Presentation.APL"];
+}
+
+function supportsAudio(handlerInput: HandlerInput): boolean {
+  const ifaces =
+    handlerInput.requestEnvelope.context?.System?.device?.supportedInterfaces;
+  return !!ifaces?.AudioPlayer;
+}
+
+function getSlotValue(
+  handlerInput: HandlerInput,
+  slotName: string,
+): string | undefined {
+  const intent = (handlerInput.requestEnvelope.request as any).intent;
+  return intent?.slots?.[slotName]?.value;
+}
+
+function audioPlayerState(
+  handlerInput: HandlerInput,
+): interfaces.audioplayer.AudioPlayerState | undefined {
+  return handlerInput.requestEnvelope.context?.AudioPlayer as
+    | interfaces.audioplayer.AudioPlayerState
+    | undefined;
+}
+
+/** Build an AudioPlayer.Play directive for a single track */
+function playDirective(
+  track: lms.LmsTrack,
+  behaviour: "REPLACE_ALL" | "ENQUEUE" | "REPLACE_ENQUEUED",
+  previousToken?: string,
+): interfaces.audioplayer.PlayDirective {
+  return {
+    type: "AudioPlayer.Play",
+    playBehavior: behaviour,
+    audioItem: {
+      stream: {
+        url: track.stream_url,
+        token: String(track.id),
+        expectedPreviousToken:
+          behaviour === "ENQUEUE" ? previousToken : undefined,
+        offsetInMilliseconds: 0,
+      },
+      metadata: {
+        title: track.title,
+        subtitle: `${track.artist} · ${track.album}`,
+        art: {
+          sources: [{ url: track.artwork_url }],
+        },
+        backgroundImage: {
+          sources: [{ url: track.artwork_url }],
+        },
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Session attribute key for album queue
+// ---------------------------------------------------------------------------
+const SESSION_QUEUE = "trackQueue";
+const SESSION_QUEUE_INDEX = "trackQueueIndex";
+
+// ---------------------------------------------------------------------------
+// LaunchRequestHandler
+// ---------------------------------------------------------------------------
+
+export const LaunchRequestHandler: RequestHandler = {
+  canHandle(input) {
+    return input.requestEnvelope.request.type === "LaunchRequest";
+  },
+  async handle(input): Promise<Response> {
+    let nowPlaying: lms.NowPlayingResult | null = null;
+    try {
+      nowPlaying = await lms.nowPlaying();
+    } catch {
+      /* not fatal */
+    }
+
+    const speechText = nowPlaying?.is_playing
+      ? `Squeezebox is playing ${nowPlaying.track?.title ?? "something"}. What would you like to do?`
+      : "Squeezebox is ready. You can say things like: play Radiohead, play the album OK Computer, or pause.";
+
+    const builder = input.responseBuilder
+      .speak(speechText)
+      .reprompt("What would you like to play?");
+
+    if (supportsApl(input) && nowPlaying?.track) {
+      builder.addDirective(buildNowPlayingApl(nowPlaying.track));
+    }
+
+    return builder.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// PlayTrackIntent  – "play {SearchQuery}"
+// Slot: SearchQuery (AMAZON.SearchQuery) — the only music search slot
+// available in en-GB
+// ---------------------------------------------------------------------------
+
+export const PlayTrackIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name === "PlayTrackIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    if (!supportsAudio(input)) {
+      return input.responseBuilder
+        .speak("Sorry, this device doesn't support audio playback.")
+        .getResponse();
+    }
+
+    const query = getSlotValue(input, "SearchQuery");
+    if (!query) {
+      return input.responseBuilder
+        .speak("What track would you like to play?")
+        .reprompt("Which track?")
+        .getResponse();
+    }
+
+    const { results } = await lms.search(query, "track");
+    const tracks = results as lms.LmsTrack[];
+
+    if (!tracks.length) {
+      return input.responseBuilder
+        .speak(`Sorry, I couldn't find any tracks matching ${query}.`)
+        .getResponse();
+    }
+
+    const track = tracks[0];
+    const response = input.responseBuilder
+      .speak(`Playing ${track.title} by ${track.artist}.`)
+      .addDirective(playDirective(track, "REPLACE_ALL"))
+      .withShouldEndSession(true);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(track));
+    }
+
+    return response.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// PlayAlbumIntent  – "play the album {SearchQuery}"
+// Loads all tracks into a queue via successive ENQUEUE directives.
+// Only the first track is sent immediately; subsequent tracks are enqueued
+// via AudioPlayer.PlaybackNearlyFinished events (see AudioPlayerHandlers).
+// ---------------------------------------------------------------------------
+
+export const PlayAlbumIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name === "PlayAlbumIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    if (!supportsAudio(input)) {
+      return input.responseBuilder
+        .speak("Sorry, this device doesn't support audio playback.")
+        .getResponse();
+    }
+
+    const query = getSlotValue(input, "SearchQuery");
+    if (!query) {
+      return input.responseBuilder
+        .speak("Which album would you like to play?")
+        .reprompt("Which album?")
+        .getResponse();
+    }
+
+    // Search for the album first
+    const { results: albumResults } = await lms.search(query, "album");
+    if (!albumResults.length) {
+      return input.responseBuilder
+        .speak(`Sorry, I couldn't find an album called ${query}.`)
+        .getResponse();
+    }
+
+    const album = albumResults[0] as lms.LmsAlbum;
+    const { tracks } = await lms.albumTracks(album.id);
+
+    if (!tracks.length) {
+      return input.responseBuilder
+        .speak(`The album ${album.title} appears to have no tracks.`)
+        .getResponse();
+    }
+
+    // Persist the full queue in session so PlaybackNearlyFinished can enqueue
+    const attrs = input.attributesManager.getSessionAttributes();
+    attrs[SESSION_QUEUE] = tracks.map((t) => t.id);
+    attrs[SESSION_QUEUE_INDEX] = 0;
+    input.attributesManager.setSessionAttributes(attrs);
+
+    const response = input.responseBuilder
+      .speak(`Playing ${album.title} by ${album.artist}.`)
+      .addDirective(playDirective(tracks[0], "REPLACE_ALL"))
+      .withShouldEndSession(true);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(tracks[0]));
+    }
+
+    return response.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// PlayArtistIntent  – "play {SearchQuery}"  (artist mode)
+// ---------------------------------------------------------------------------
+
+export const PlayArtistIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name === "PlayArtistIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    if (!supportsAudio(input)) {
+      return input.responseBuilder
+        .speak("Sorry, this device doesn't support audio playback.")
+        .getResponse();
+    }
+
+    const query = getSlotValue(input, "SearchQuery");
+    if (!query) {
+      return input.responseBuilder
+        .speak("Which artist would you like to play?")
+        .reprompt("Which artist?")
+        .getResponse();
+    }
+
+    const { results } = await lms.search(query, "track");
+    const tracks = results as lms.LmsTrack[];
+
+    if (!tracks.length) {
+      return input.responseBuilder
+        .speak(`Sorry, I couldn't find any tracks by ${query}.`)
+        .getResponse();
+    }
+
+    const attrs = input.attributesManager.getSessionAttributes();
+    attrs[SESSION_QUEUE] = tracks.map((t) => t.id);
+    attrs[SESSION_QUEUE_INDEX] = 0;
+    input.attributesManager.setSessionAttributes(attrs);
+
+    const response = input.responseBuilder
+      .speak(`Playing music by ${query}.`)
+      .addDirective(playDirective(tracks[0], "REPLACE_ALL"))
+      .withShouldEndSession(true);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(tracks[0]));
+    }
+
+    return response.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Pause / Resume / Stop  (AMAZON built-ins – available in en-GB)
+// ---------------------------------------------------------------------------
+
+export const PauseIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name ===
+        "AMAZON.PauseIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    return input.responseBuilder
+      .addDirective({ type: "AudioPlayer.Stop" })
+      .withShouldEndSession(true)
+      .getResponse();
+  },
+};
+
+export const ResumeIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name ===
+        "AMAZON.ResumeIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    // Resume Alexa's own AudioPlayer at the offset it paused at
+    const ap = audioPlayerState(input);
+    const token = ap?.token;
+    if (!token) {
+      return input.responseBuilder.speak("Nothing to resume.").getResponse();
+    }
+
+    const offsetMs = ap?.offsetInMilliseconds ?? 0;
+    const trackId = parseInt(token, 10);
+
+    // Fetch track metadata (needed for signed stream URL)
+    let track: lms.LmsTrack;
+    try {
+      track = await lms.getTrack(trackId);
+    } catch {
+      return input.responseBuilder.speak("Nothing to resume.").getResponse();
+    }
+
+    const directive = playDirective(track, "REPLACE_ALL");
+    (directive.audioItem!.stream as any).offsetInMilliseconds = offsetMs;
+
+    const response = input.responseBuilder
+      .addDirective(directive)
+      .withShouldEndSession(true);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(track));
+    }
+
+    return response.getResponse();
+  },
+};
+
+export const StopIntentHandler: RequestHandler = {
+  canHandle(input) {
+    const reqType = input.requestEnvelope.request.type;
+    const intentName =
+      reqType === "IntentRequest"
+        ? (input.requestEnvelope.request as any).intent.name
+        : "";
+    return (
+      reqType === "IntentRequest" &&
+      (intentName === "AMAZON.StopIntent" ||
+        intentName === "AMAZON.CancelIntent")
+    );
+  },
+  async handle(input): Promise<Response> {
+    return input.responseBuilder
+      .speak("Stopping.")
+      .addDirective({ type: "AudioPlayer.Stop" })
+      .withShouldEndSession(true)
+      .getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Next / Previous  (AMAZON built-ins – available in en-GB)
+// ---------------------------------------------------------------------------
+
+export const NextIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name === "AMAZON.NextIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    const attrs = input.attributesManager.getSessionAttributes();
+    const queue: number[] = attrs[SESSION_QUEUE] ?? [];
+    const idx: number = (attrs[SESSION_QUEUE_INDEX] ?? 0) + 1;
+
+    if (idx >= queue.length) {
+      return input.responseBuilder
+        .speak("That's the end of the queue.")
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    const trackId = queue[idx];
+    let track: lms.LmsTrack;
+    try {
+      track = await lms.getTrack(trackId);
+    } catch {
+      return input.responseBuilder
+        .speak("Sorry, I couldn't find the next track.")
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    attrs[SESSION_QUEUE_INDEX] = idx;
+    input.attributesManager.setSessionAttributes(attrs);
+
+    const response = input.responseBuilder
+      .addDirective(playDirective(track, "REPLACE_ALL"))
+      .withShouldEndSession(true);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(track));
+    }
+
+    return response.getResponse();
+  },
+};
+
+export const PreviousIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name ===
+        "AMAZON.PreviousIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    const attrs = input.attributesManager.getSessionAttributes();
+    const queue: number[] = attrs[SESSION_QUEUE] ?? [];
+    const idx: number = (attrs[SESSION_QUEUE_INDEX] ?? 0) - 1;
+
+    if (idx < 0) {
+      return input.responseBuilder
+        .speak("That's the start of the queue.")
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    const trackId = queue[idx];
+    let track: lms.LmsTrack;
+    try {
+      track = await lms.getTrack(trackId);
+    } catch {
+      return input.responseBuilder
+        .speak("Sorry, I couldn't find the previous track.")
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    attrs[SESSION_QUEUE_INDEX] = idx;
+    input.attributesManager.setSessionAttributes(attrs);
+
+    const response = input.responseBuilder
+      .addDirective(playDirective(track, "REPLACE_ALL"))
+      .withShouldEndSession(true);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(track));
+    }
+
+    return response.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// VolumeIntent  – "set volume to {Volume}"
+// Slot: Volume (AMAZON.NUMBER) – available in en-GB
+// ---------------------------------------------------------------------------
+
+export const VolumeIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name === "VolumeIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    const raw = getSlotValue(input, "Volume");
+    const vol = raw ? Math.min(100, Math.max(0, parseInt(raw, 10))) : NaN;
+
+    if (isNaN(vol)) {
+      return input.responseBuilder
+        .speak("What volume would you like? Say a number between 0 and 100.")
+        .reprompt("What volume?")
+        .getResponse();
+    }
+
+    await lms.control("volume", vol);
+    return input.responseBuilder
+      .speak(`Volume set to ${vol}.`)
+      .withShouldEndSession(true)
+      .getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// NowPlayingIntent  – "what's playing?"
+// ---------------------------------------------------------------------------
+
+export const NowPlayingIntentHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "IntentRequest" &&
+      (input.requestEnvelope.request as any).intent.name === "NowPlayingIntent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    let np: Awaited<ReturnType<typeof lms.nowPlaying>>;
+    try {
+      np = await lms.nowPlaying();
+    } catch {
+      return input.responseBuilder
+        .speak("Sorry, I couldn't reach the music server. Please try again.")
+        .getResponse();
+    }
+
+    if (!np.track || !np.is_playing) {
+      return input.responseBuilder
+        .speak("Nothing is playing right now.")
+        .getResponse();
+    }
+
+    const speech = `Now playing: ${np.track.title} by ${np.track.artist}, from the album ${np.track.album}.`;
+    const response = input.responseBuilder.speak(speech);
+
+    if (supportsApl(input)) {
+      response.addDirective(buildNowPlayingApl(np.track));
+    }
+
+    return response.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// AudioPlayer event handlers
+// Required for any skill using the AudioPlayer interface.
+// ---------------------------------------------------------------------------
+
+export const AudioPlayerHandlers: RequestHandler[] = [
+  {
+    // Fired when Alexa is about to finish the current track — enqueue the next
+    canHandle: (input) =>
+      input.requestEnvelope.request.type ===
+      "AudioPlayer.PlaybackNearlyFinished",
+    async handle(input): Promise<Response> {
+      const attrs = input.attributesManager.getSessionAttributes();
+      const queue: number[] = attrs[SESSION_QUEUE] ?? [];
+      const idx: number = (attrs[SESSION_QUEUE_INDEX] ?? 0) + 1;
+
+      if (idx >= queue.length) {
+        return input.responseBuilder.getResponse();
+      }
+
+      const currentToken = (input.requestEnvelope.request as any)
+        .token as string;
+      const nextTrackId = queue[idx];
+
+      // Fetch track metadata (needed for signed stream_url)
+      let next: lms.LmsTrack;
+      try {
+        next = await lms.getTrack(nextTrackId);
+      } catch {
+        return input.responseBuilder.getResponse();
+      }
+
+      attrs[SESSION_QUEUE_INDEX] = idx;
+      input.attributesManager.setSessionAttributes(attrs);
+
+      return input.responseBuilder
+        .addDirective(playDirective(next, "ENQUEUE", currentToken))
+        .getResponse();
+    },
+  },
+  {
+    canHandle: (input) =>
+      input.requestEnvelope.request.type === "AudioPlayer.PlaybackStarted",
+    handle: (input) => input.responseBuilder.getResponse(),
+  },
+  {
+    canHandle: (input) =>
+      input.requestEnvelope.request.type === "AudioPlayer.PlaybackFinished",
+    handle: (input) => input.responseBuilder.getResponse(),
+  },
+  {
+    canHandle: (input) =>
+      input.requestEnvelope.request.type === "AudioPlayer.PlaybackStopped",
+    handle: (input) => input.responseBuilder.getResponse(),
+  },
+  {
+    canHandle: (input) =>
+      input.requestEnvelope.request.type === "AudioPlayer.PlaybackFailed",
+    handle: (input) => {
+      console.error(
+        "AudioPlayer.PlaybackFailed",
+        JSON.stringify((input.requestEnvelope.request as any).error),
+      );
+      return input.responseBuilder.getResponse();
+    },
+  },
+];
+
+// Required by Alexa when AudioPlayer is enabled
+export const PlaybackControllerHandlers: RequestHandler[] = [
+  {
+    canHandle: (input) =>
+      input.requestEnvelope.request.type.startsWith("PlaybackController."),
+    handle: (input) => input.responseBuilder.getResponse(),
+  },
+];
+
+// ---------------------------------------------------------------------------
+// SessionEndedRequestHandler
+// ---------------------------------------------------------------------------
+
+export const SessionEndedRequestHandler: RequestHandler = {
+  canHandle(input) {
+    return input.requestEnvelope.request.type === "SessionEndedRequest";
+  },
+  handle(input): Response {
+    const reason = (input.requestEnvelope.request as any).reason;
+    if (reason === "ERROR") {
+      console.error(
+        "Session ended with error:",
+        JSON.stringify((input.requestEnvelope.request as any).error),
+      );
+    }
+    return input.responseBuilder.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// ErrorHandler
+// ---------------------------------------------------------------------------
+
+export const ErrorHandler: IErrorHandler = {
+  canHandle: () => true,
+  handle(input, error): Response {
+    console.error("Unhandled error:", error.message, error.stack);
+    return input.responseBuilder
+      .speak("Sorry, something went wrong. Please try again.")
+      .getResponse();
+  },
+};

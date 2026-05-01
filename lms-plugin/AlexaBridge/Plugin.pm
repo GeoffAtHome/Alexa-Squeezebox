@@ -25,6 +25,8 @@ package Plugins::AlexaBridge::Plugin;
 #   GET /alexa/control?player=<id>&cmd=pause|resume|next|prev|volume|stop&value=<v>&token=<t>
 #   GET /alexa/players?token=<t>
 #   GET /alexa/stream/<track_id>?exp=<unix_ts>&sig=<hmac>   ← no API token, self-signed
+#   GET /alexa/playback?state=playing|paused|stopped&trackId=<id>&offsetMs=<ms>&token=<t>
+#   GET /alexa/playback/current?token=<t>
 
 use strict;
 use warnings;
@@ -53,6 +55,19 @@ my $log = Slim::Utils::Log->addLogCategory({
 });
 
 my $prefs = preferences('plugin.alexabridge');
+
+# ---------------------------------------------------------------------------
+# Shadow state – mirrors what Alexa AudioPlayer is currently doing so that
+# anything that queries LMS can see what's playing via Alexa.
+# Updated by Lambda via GET /alexa/playback; read via /alexa/playback/current.
+# ---------------------------------------------------------------------------
+
+my %_alexa_state = (
+    state   => 'stopped',   # stopped | playing | paused
+    trackId => undef,       # LMS track DB id (integer) or undef
+    offsetMs => 0,          # offsetInMilliseconds
+    updated  => 0,          # epoch time of last update
+);
 
 $prefs->init({
     secret    => '',       # Shared secret – set this in plugin settings
@@ -96,14 +111,16 @@ sub _dispatch {
         }
     }
 
-    if    ( $path =~ m{^/alexa/search$} )                  { _search(      $httpClient, $httpResponse, \%params ) }
-    elsif ( $path =~ m{^/alexa/album/(\d+)/tracks$} )      { _albumTracks( $httpClient, $httpResponse, $1, \%params ) }
-    elsif ( $path =~ m{^/alexa/track/(\d+)$} )             { _track(       $httpClient, $httpResponse, $1 ) }
-    elsif ( $path =~ m{^/alexa/nowplaying$} )              { _nowPlaying(  $httpClient, $httpResponse, \%params ) }
-    elsif ( $path =~ m{^/alexa/control$} )                 { _control(     $httpClient, $httpResponse, \%params ) }
-    elsif ( $path =~ m{^/alexa/players$} )                 { _players(     $httpClient, $httpResponse ) }
-    elsif ( $path =~ m{^/alexa/stream/(\d+)$} )            { _streamTrack( $httpClient, $httpResponse, $1, \%params ) }
-    else                                                   { _sendError(   $httpClient, $httpResponse, 404, 'Not found' ) }
+    if    ( $path =~ m{^/alexa/search$} )                  { _search(          $httpClient, $httpResponse, \%params ) }
+    elsif ( $path =~ m{^/alexa/album/(\d+)/tracks$} )      { _albumTracks(     $httpClient, $httpResponse, $1, \%params ) }
+    elsif ( $path =~ m{^/alexa/track/(\d+)$} )             { _track(           $httpClient, $httpResponse, $1 ) }
+    elsif ( $path =~ m{^/alexa/nowplaying$} )              { _nowPlaying(      $httpClient, $httpResponse, \%params ) }
+    elsif ( $path =~ m{^/alexa/control$} )                 { _control(         $httpClient, $httpResponse, \%params ) }
+    elsif ( $path =~ m{^/alexa/players$} )                 { _players(         $httpClient, $httpResponse ) }
+    elsif ( $path =~ m{^/alexa/stream/(\d+)$} )            { _streamTrack(     $httpClient, $httpResponse, $1, \%params ) }
+    elsif ( $path =~ m{^/alexa/playback/current$} )        { _playbackCurrent( $httpClient, $httpResponse ) }
+    elsif ( $path =~ m{^/alexa/playback$} )                { _playbackUpdate(  $httpClient, $httpResponse, \%params ) }
+    else                                                   { _sendError(       $httpClient, $httpResponse, 404, 'Not found' ) }
 }
 
 # ---------------------------------------------------------------------------
@@ -299,6 +316,57 @@ sub _streamTrack {
     $httpResponse->header( Location => "/music/${trackId}/download" );
     $httpClient->send_response($httpResponse);
     Slim::Web::HTTP::closeHTTPSocket($httpClient);
+}
+
+# GET /alexa/playback?state=playing|paused|stopped&trackId=<id>&offsetMs=<ms>&token=<t>
+#
+# Called by Lambda whenever the Alexa AudioPlayer state changes.  Updates the
+# in-memory shadow state so /alexa/playback/current always reflects reality.
+sub _playbackUpdate {
+    my ( $httpClient, $httpResponse, $p ) = @_;
+
+    my $state = $p->{state} // 'stopped';
+    unless ( $state =~ m{^(playing|paused|stopped)$} ) {
+        return _sendError( $httpClient, $httpResponse, 400, 'Invalid state' );
+    }
+
+    my $trackId  = $p->{trackId}  ? $p->{trackId}  + 0 : undef;
+    my $offsetMs = $p->{offsetMs} ? $p->{offsetMs} + 0 : 0;
+
+    %_alexa_state = (
+        state    => $state,
+        trackId  => $trackId,
+        offsetMs => $offsetMs,
+        updated  => time(),
+    );
+
+    $log->debug("Alexa shadow state updated: state=$state trackId=" . ($trackId // 'none') . " offsetMs=$offsetMs");
+
+    _sendJSON( $httpClient, $httpResponse, { ok => JSON::XS::true, state => $state } );
+}
+
+# GET /alexa/playback/current?token=<t>
+#
+# Returns the current Alexa shadow playback state, including full track
+# metadata when a trackId is available.
+sub _playbackCurrent {
+    my ( $httpClient, $httpResponse ) = @_;
+
+    my $trackId = $_alexa_state{trackId};
+    my $track   = undef;
+
+    if ( defined $trackId ) {
+        my $t = Slim::Schema->find( 'Track', $trackId );
+        $track = $t ? _trackData($t) : undef;
+    }
+
+    _sendJSON( $httpClient, $httpResponse, {
+        state    => $_alexa_state{state},
+        trackId  => $trackId,
+        offsetMs => $_alexa_state{offsetMs} + 0,
+        updated  => $_alexa_state{updated}  + 0,
+        track    => $track,
+    });
 }
 
 # GET /alexa/track/<id>

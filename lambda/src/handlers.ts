@@ -335,6 +335,14 @@ export const PauseIntentHandler: RequestHandler = {
     );
   },
   async handle(input): Promise<Response> {
+    const ap = audioPlayerState(input);
+    const state = decodeQueueState(ap?.token);
+    const offsetMs = ap?.offsetInMilliseconds ?? 0;
+    void lms.reportPlayback(
+      "paused",
+      state ? state.queue[state.index] : undefined,
+      offsetMs,
+    );
     return input.responseBuilder
       .addDirective({ type: "AudioPlayer.Stop" })
       .withShouldEndSession(true)
@@ -379,6 +387,8 @@ export const ResumeIntentHandler: RequestHandler = {
     );
     (directive.audioItem!.stream as any).offsetInMilliseconds = offsetMs;
 
+    void lms.reportPlayback("playing", trackId, offsetMs);
+
     const response = input.responseBuilder
       .addDirective(directive)
       .withShouldEndSession(true);
@@ -405,6 +415,7 @@ export const StopIntentHandler: RequestHandler = {
     );
   },
   async handle(input): Promise<Response> {
+    void lms.reportPlayback("stopped");
     return input.responseBuilder
       .speak("Stopping.")
       .addDirective({ type: "AudioPlayer.Stop" })
@@ -606,6 +617,25 @@ export const NowPlayingIntentHandler: RequestHandler = {
 
 export const AudioPlayerHandlers: RequestHandler[] = [
   {
+    // PlaybackStarted – update shadow state to playing
+    canHandle: (input) =>
+      input.requestEnvelope.request.type === "AudioPlayer.PlaybackStarted",
+    async handle(input): Promise<Response> {
+      const token = (input.requestEnvelope.request as any).token as
+        | string
+        | undefined;
+      const offsetMs =
+        (input.requestEnvelope.request as any).offsetInMilliseconds ?? 0;
+      const state = decodeQueueState(token);
+      void lms.reportPlayback(
+        "playing",
+        state ? state.queue[state.index] : undefined,
+        offsetMs,
+      );
+      return input.responseBuilder.getResponse();
+    },
+  },
+  {
     // Fired when Alexa is about to finish the current track — enqueue the next
     canHandle: (input) =>
       input.requestEnvelope.request.type ===
@@ -641,18 +671,29 @@ export const AudioPlayerHandlers: RequestHandler[] = [
   },
   {
     canHandle: (input) =>
-      input.requestEnvelope.request.type === "AudioPlayer.PlaybackStarted",
-    handle: (input) => input.responseBuilder.getResponse(),
-  },
-  {
-    canHandle: (input) =>
       input.requestEnvelope.request.type === "AudioPlayer.PlaybackFinished",
-    handle: (input) => input.responseBuilder.getResponse(),
+    handle: (input) => {
+      void lms.reportPlayback("stopped");
+      return input.responseBuilder.getResponse();
+    },
   },
   {
     canHandle: (input) =>
       input.requestEnvelope.request.type === "AudioPlayer.PlaybackStopped",
-    handle: (input) => input.responseBuilder.getResponse(),
+    handle: (input) => {
+      const token = (input.requestEnvelope.request as any).token as
+        | string
+        | undefined;
+      const offsetMs =
+        (input.requestEnvelope.request as any).offsetInMilliseconds ?? 0;
+      const state = decodeQueueState(token);
+      void lms.reportPlayback(
+        "paused",
+        state ? state.queue[state.index] : undefined,
+        offsetMs,
+      );
+      return input.responseBuilder.getResponse();
+    },
   },
   {
     canHandle: (input) =>

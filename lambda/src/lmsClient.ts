@@ -190,3 +190,29 @@ export async function listPlayers(): Promise<Player[]> {
   const result = await apiGet<{ players: Player[] }>("/alexa/players");
   return result.players;
 }
+
+// ---------------------------------------------------------------------------
+// Shadow state reporting
+// ---------------------------------------------------------------------------
+
+export type PlaybackState = "playing" | "paused" | "stopped";
+
+/**
+ * Report the current Alexa AudioPlayer state back to LMS so LMS can shadow
+ * what Alexa is playing.  Errors are swallowed – this is best-effort.
+ */
+export async function reportPlayback(
+  state: PlaybackState,
+  trackId?: number,
+  offsetMs?: number,
+): Promise<void> {
+  const params: Record<string, string> = { state };
+  if (trackId !== undefined) params.trackId = String(trackId);
+  if (offsetMs !== undefined) params.offsetMs = String(offsetMs);
+  try {
+    await apiGet("/alexa/playback", params);
+  } catch (err) {
+    // Non-fatal – don't let a reporting failure break playback
+    console.warn("reportPlayback failed:", (err as Error).message);
+  }
+}

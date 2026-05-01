@@ -86,6 +86,8 @@ sub initPlugin {
 
     # Register raw HTTP handler for all /alexa/* paths
     Slim::Web::Pages->addRawFunction( qr{^/alexa/}, \&_dispatch );
+    # Human-friendly status page in LMS web UI
+    Slim::Web::Pages->addRawFunction( qr{^/plugins/alexabridge/status/?$}, \&_statusPage );
 
     $log->info('AlexaBridge plugin initialised');
 }
@@ -369,6 +371,60 @@ sub _playbackCurrent {
     });
 }
 
+# GET /plugins/alexabridge/status
+#
+# Simple human-readable LMS page showing current Alexa shadow state.
+sub _statusPage {
+    my ( $httpClient, $httpResponse ) = @_;
+
+    my $trackId = $_alexa_state{trackId};
+    my $track;
+    if ( defined $trackId ) {
+        my $t = Slim::Schema->find( 'Track', $trackId );
+        $track = $t ? _trackData($t) : undef;
+    }
+
+    my $state    = _escapeHtml( $_alexa_state{state} // 'stopped' );
+    my $offsetMs = int( $_alexa_state{offsetMs} // 0 );
+    my $updated  = int( $_alexa_state{updated}  // 0 );
+
+    my $title  = _escapeHtml( $track ? ( $track->{title}  // '' ) : '' );
+    my $artist = _escapeHtml( $track ? ( $track->{artist} // '' ) : '' );
+    my $album  = _escapeHtml( $track ? ( $track->{album}  // '' ) : '' );
+
+    my $when = $updated ? scalar localtime($updated) : 'never';
+    my $body = "";
+    $body .= qq{<!doctype html>\n};
+    $body .= qq{<html><head><meta charset="utf-8">};
+    $body .= qq{<meta http-equiv="refresh" content="5">};
+    $body .= qq{<title>Alexa Bridge Status</title>};
+    $body .= qq{<style>body{font-family:Arial,sans-serif;margin:24px;line-height:1.45;color:#222}h1{margin:0 0 12px}code{background:#f2f2f2;padding:2px 6px;border-radius:4px}.card{border:1px solid #ddd;border-radius:8px;padding:14px;max-width:780px}.meta{color:#555;margin-top:8px}</style>};
+    $body .= qq{</head><body>};
+    $body .= qq{<h1>Alexa Bridge Status</h1>};
+    $body .= qq{<div class="card">};
+    $body .= qq{<div><strong>State:</strong> <code>$state</code></div>};
+    $body .= qq{<div><strong>Track ID:</strong> <code>} . ( defined $trackId ? int($trackId) : 'none' ) . qq{</code></div>};
+    $body .= qq{<div><strong>Offset:</strong> <code>$offsetMs ms</code></div>};
+    if ($track) {
+        $body .= qq{<div style="margin-top:10px"><strong>Now playing on Alexa</strong></div>};
+        $body .= qq{<div>Title: $title</div>};
+        $body .= qq{<div>Artist: $artist</div>};
+        $body .= qq{<div>Album: $album</div>};
+    } else {
+        $body .= qq{<div style="margin-top:10px">No track metadata cached yet.</div>};
+    }
+    $body .= qq{<div class="meta">Last update: $when</div>};
+    $body .= qq{<div class="meta"><a href="/plugins/alexabridge/status">Refresh now</a></div>};
+    $body .= qq{</div></body></html>};
+
+    $httpResponse->code(200);
+    $httpResponse->content_type('text/html; charset=utf-8');
+    $httpResponse->header( 'Cache-Control' => 'no-store' );
+    $httpResponse->content($body);
+    $httpClient->send_response($httpResponse);
+    Slim::Web::HTTP::closeHTTPSocket($httpClient);
+}
+
 # GET /alexa/track/<id>
 #
 # Returns metadata for a single track by its LMS database ID.
@@ -439,6 +495,17 @@ sub _constTimeEq {
     $diff |= ord( substr( $a, $_, 1 ) ) ^ ord( substr( $b, $_, 1 ) )
         for 0 .. length($a) - 1;
     return $diff == 0;
+}
+
+sub _escapeHtml {
+    my ($s) = @_;
+    $s = '' unless defined $s;
+    $s =~ s/&/&amp;/g;
+    $s =~ s/</&lt;/g;
+    $s =~ s/>/&gt;/g;
+    $s =~ s/"/&quot;/g;
+    $s =~ s/'/&#39;/g;
+    return $s;
 }
 
 # ---------------------------------------------------------------------------

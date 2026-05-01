@@ -4,7 +4,7 @@ package Plugins::AlexaBridge::Settings;
 #   - Shared secret (used for API token and stream URL signing)
 #   - Stream URL TTL (how long signed stream URLs remain valid)
 #
-# Accessible at: http://<lms-host>:9000/plugins/alexabridge/settings
+# Accessible at: http://<lms-host>:9000/plugins/AlexaBridge/settings/basic.html
 
 use strict;
 use warnings;
@@ -17,11 +17,11 @@ use Slim::Web::HTTP;
 my $prefs = preferences('plugin.alexabridge');
 
 sub name {
-    return Slim::Web::HTTP::CSRF->protectName('PLUGIN_ALEXABRIDGE');
+    return 'PLUGIN_ALEXABRIDGE';
 }
 
 sub page {
-    return Slim::Web::HTTP::CSRF->protectURI('plugins/alexabridge/settings/basic.html');
+    return 'plugins/AlexaBridge/settings/basic.html';
 }
 
 sub prefs  {
@@ -29,7 +29,7 @@ sub prefs  {
 }
 
 sub handler {
-    my ( $class, $client, $params ) = @_;
+    my ( $class, $client, $params, $pageSetup ) = @_;
 
     if ( $params->{saveSettings} ) {
         $prefs->set( secret    => $params->{pref_secret}    // '' );
@@ -45,7 +45,9 @@ sub handler {
         $params->{api_token} = Digest::SHA::hmac_sha1_hex( 'api', $secret );
     }
 
-    return $class->SUPER::handler( $client, $params );
+    $params->{status_url} = '/plugins/alexabridge/status';
+
+    return $class->SUPER::handler( $client, $params, $pageSetup );
 }
 
 1;

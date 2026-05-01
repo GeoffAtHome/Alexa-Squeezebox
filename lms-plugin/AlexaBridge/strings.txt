@@ -21,3 +21,9 @@ PLUGIN_ALEXABRIDGE_API_TOKEN
 
 PLUGIN_ALEXABRIDGE_API_TOKEN_DESC
 	EN	Set this value as LMS_API_TOKEN in your Lambda environment variables.
+
+PLUGIN_ALEXABRIDGE_STATUS_PAGE
+	EN	Alexa Status Page
+
+PLUGIN_ALEXABRIDGE_STATUS_PAGE_DESC
+	EN	Open the live Alexa shadow playback status page.

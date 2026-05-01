@@ -67,7 +67,12 @@ Restart LMS. The plugin will appear in **Settings → Plugins**.
 
 ### 2. Configure the plugin secret
 
-Either use the settings page (Settings → AlexaBridge) or edit the prefs file directly:
+Use the plugin Settings link from **Settings → Advanced → Manage Plugins → Alexa Bridge**,
+or open the settings page directly:
+
+`https://your-lms-domain.com/plugins/AlexaBridge/settings/basic.html`
+
+You can also edit the prefs file directly:
 
 **Windows**: `C:\ProgramData\Lyrion\prefs\plugin\alexabridge.prefs`
 
@@ -175,9 +180,19 @@ All endpoints (except `/alexa/stream`) require `?token=<api-token>`.
 | GET    | `/alexa/nowplaying?player=<id>`                     | Current playback state for a player                         |
 | GET    | `/alexa/control?player=<id>&cmd=<cmd>`              | Send playback command to a player                           |
 | GET    | `/alexa/players`                                    | List all connected LMS players                              |
+| GET    | `/alexa/playback?state=playing\|paused\|stopped&trackId=<id>&offsetMs=<ms>` | Update Alexa shadow playback state (called by Lambda) |
+| GET    | `/alexa/playback/current`                           | Read current Alexa shadow playback state                    |
 | GET    | `/alexa/stream/<id>?exp=<ts>&sig=<hmac>`            | Serve/redirect audio (self-signed URL, no API token needed) |
 
 Stream URLs are signed with HMAC-SHA1 and expire after `token_ttl` seconds (default 24 hours).
+
+### Alexa Shadow Status Page
+
+To see what Alexa is currently playing in LMS, open:
+
+`https://your-lms-domain.com/plugins/alexabridge/status`
+
+This page auto-refreshes and shows shadow state, track metadata, and last update time.
 
 ## Development
 

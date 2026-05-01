@@ -12,4 +12,5 @@
     <id>SlimServer</id>
   </targetApplication>
   <name>PLUGIN_ALEXABRIDGE</name>
+  <optionsURL>plugins/AlexaBridge/settings/basic.html</optionsURL>
 </extensions>

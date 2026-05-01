@@ -94,6 +94,97 @@ function decodeQueueState(token?: string): QueueState | undefined {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Query parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a free-text play query into title + optional artist.
+ *
+ * Recognised patterns:
+ *   "Title by Artist"       → { title: "Title", artist: "Artist" }
+ *   "Artist's Title"        → { title: "Title", artist: "Artist" }
+ *   "Artist's Title"        → same (smart apostrophe)
+ *   anything else           → { title: rawQuery }
+ */
+function parseQuery(raw: string): { title: string; artist?: string } {
+  // "Title by Artist"  (e.g. "Dark Side of the Moon by Pink Floyd")
+  const byMatch = /^(.+?)\s+by\s+([^,]+?)\s*$/i.exec(raw);
+  if (byMatch) return { title: byMatch[1].trim(), artist: byMatch[2].trim() };
+
+  // "Artist's Title" or "Artist's Title" (straight or curly apostrophe)
+  const possMatch = /^(.+?)[\u2019']s\s+(.+)$/i.exec(raw);
+  if (possMatch)
+    return { title: possMatch[2].trim(), artist: possMatch[1].trim() };
+
+  return { title: raw };
+}
+
+function artistMatches(candidate: string, query: string): boolean {
+  const a = candidate.toLowerCase();
+  const b = query.toLowerCase();
+  return a.includes(b) || b.includes(a);
+}
+
+interface PlayResolution {
+  tracks: lms.LmsTrack[];
+  speech: string;
+}
+
+/**
+ * Resolve a free-text play query to an ordered list of tracks.
+ *
+ * Strategy:
+ *   1. Parse "Title by Artist" / "Artist's Title" patterns.
+ *   2. Search albums matching the title; pick one matching the artist if given.
+ *   3. If a matching album is found, return its full track list.
+ *   4. Otherwise fall back to track search, optionally filtered by artist.
+ */
+async function resolvePlayQuery(rawQuery: string): Promise<PlayResolution> {
+  const { title, artist } = parseQuery(rawQuery);
+
+  // --- Album search first ---
+  try {
+    const { results: albumResults } = await lms.search(title, "album");
+    const albums = albumResults as lms.LmsAlbum[];
+
+    // Prefer artist-matching album; fall back to first result
+    const album = artist
+      ? (albums.find((a) => artistMatches(a.artist, artist)) ?? albums[0])
+      : albums[0];
+
+    if (album) {
+      const { tracks } = await lms.albumTracks(album.id);
+      if (tracks.length) {
+        return {
+          tracks,
+          speech: `Playing ${album.title} by ${album.artist}.`,
+        };
+      }
+    }
+  } catch {
+    /* fall through to track search */
+  }
+
+  // --- Track search fallback ---
+  // Include artist in query string to improve relevance
+  const trackQuery = artist ? `${title} ${artist}` : title;
+  const { results } = await lms.search(trackQuery, "track");
+  let tracks = results as lms.LmsTrack[];
+
+  if (artist && tracks.length) {
+    const filtered = tracks.filter((t) => artistMatches(t.artist, artist));
+    if (filtered.length) tracks = filtered;
+  }
+
+  return {
+    tracks,
+    speech: tracks.length
+      ? `Playing ${tracks[0].title} by ${tracks[0].artist}.`
+      : "",
+  };
+}
+
 /** Build an AudioPlayer.Play directive for a single track */
 function playDirective(
   track: lms.LmsTrack,
@@ -125,6 +216,12 @@ function playDirective(
     },
   };
 }
+
+/**
+ * Exported for unit testing only.
+ * @internal
+ */
+export { parseQuery as parseQueryForTest };
 
 // ---------------------------------------------------------------------------
 // LaunchRequestHandler
@@ -181,28 +278,29 @@ export const PlayTrackIntentHandler: RequestHandler = {
     const query = getSlotValue(input, "SearchQuery");
     if (!query) {
       return input.responseBuilder
-        .speak("What track would you like to play?")
-        .reprompt("Which track?")
+        .speak("What would you like to play?")
+        .reprompt("What would you like to play?")
         .getResponse();
     }
 
-    const { results } = await lms.search(query, "track");
-    const tracks = results as lms.LmsTrack[];
+    const { tracks, speech } = await resolvePlayQuery(query);
 
     if (!tracks.length) {
       return input.responseBuilder
-        .speak(`Sorry, I couldn't find any tracks matching ${query}.`)
+        .speak(`Sorry, I couldn't find anything matching ${query}.`)
         .getResponse();
     }
 
-    const track = tracks[0];
+    const queue = tracks.map((t) => t.id);
+    const token = encodeQueueState(queue, 0);
+
     const response = input.responseBuilder
-      .speak(`Playing ${track.title} by ${track.artist}.`)
-      .addDirective(playDirective(track, "REPLACE_ALL"))
+      .speak(speech)
+      .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(track));
+      response.addDirective(buildNowPlayingApl(tracks[0]));
     }
 
     return response.getResponse();
@@ -238,27 +336,21 @@ export const PlayAlbumIntentHandler: RequestHandler = {
         .getResponse();
     }
 
-    // Search for the album first
-    const { results: albumResults } = await lms.search(query, "album");
-    if (!albumResults.length) {
-      return input.responseBuilder
-        .speak(`Sorry, I couldn't find an album called ${query}.`)
-        .getResponse();
-    }
-
-    const album = albumResults[0] as lms.LmsAlbum;
-    const { tracks } = await lms.albumTracks(album.id);
+    // resolvePlayQuery already tries album first, so this covers
+    // "play the album Dark Side of the Moon by Pink Floyd" etc.
+    const { tracks, speech } = await resolvePlayQuery(query);
 
     if (!tracks.length) {
       return input.responseBuilder
-        .speak(`The album ${album.title} appears to have no tracks.`)
+        .speak(`Sorry, I couldn't find an album matching ${query}.`)
         .getResponse();
     }
+
     const queue = tracks.map((t) => t.id);
     const token = encodeQueueState(queue, 0);
 
     const response = input.responseBuilder
-      .speak(`Playing ${album.title} by ${album.artist}.`)
+      .speak(speech)
       .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
 

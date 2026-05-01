@@ -2,6 +2,8 @@ import {
   AudioPlayerHandlers,
   NextIntentHandler,
   PlayAlbumIntentHandler,
+  PlayTrackIntentHandler,
+  parseQueryForTest,
 } from "./handlers";
 import * as lms from "./lmsClient";
 import { beforeEach, describe, expect, jest, test } from "@jest/globals";
@@ -226,5 +228,154 @@ describe("handlers queue token flow", () => {
     const state = decodeToken(play.audioItem.stream.token);
     expect(state.queue).toEqual([10, 20, 30]);
     expect(state.index).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Query parsing
+// ---------------------------------------------------------------------------
+
+describe("parseQuery", () => {
+  test('parses "Title by Artist"', () => {
+    expect(parseQueryForTest("Dark Side of the Moon by Pink Floyd")).toEqual({
+      title: "Dark Side of the Moon",
+      artist: "Pink Floyd",
+    });
+  });
+
+  test("parses straight-apostrophe possessive", () => {
+    expect(parseQueryForTest("Pink Floyd's Dark Side of the Moon")).toEqual({
+      title: "Dark Side of the Moon",
+      artist: "Pink Floyd",
+    });
+  });
+
+  test("parses curly-apostrophe possessive", () => {
+    expect(
+      parseQueryForTest("Pink Floyd\u2019s Dark Side of the Moon"),
+    ).toEqual({
+      title: "Dark Side of the Moon",
+      artist: "Pink Floyd",
+    });
+  });
+
+  test("returns plain title when no pattern matches", () => {
+    expect(parseQueryForTest("Dark Side of the Moon")).toEqual({
+      title: "Dark Side of the Moon",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePlayQuery – album-first routing
+// ---------------------------------------------------------------------------
+
+describe("PlayTrackIntent routes 'by Artist' query to album", () => {
+  const mockedLms = lms as jest.Mocked<typeof lms>;
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+  });
+
+  test("plays matching album when artist qualifies the query", async () => {
+    // search("Dark Side of the Moon", "album") returns one album by Pink Floyd
+    mockedLms.search.mockResolvedValueOnce({
+      results: [
+        {
+          id: 42,
+          title: "The Dark Side of the Moon",
+          artist: "Pink Floyd",
+          year: 1973,
+        } as any,
+      ],
+    });
+    mockedLms.albumTracks.mockResolvedValueOnce({
+      album: {
+        id: 42,
+        title: "The Dark Side of the Moon",
+        artist: "Pink Floyd",
+        year: 1973,
+      } as any,
+      tracks: [
+        {
+          id: 101,
+          title: "Speak to Me",
+          artist: "Pink Floyd",
+          album: "DSOTM",
+          stream_url: "u1",
+          artwork_url: "a1",
+          duration: 60,
+          tracknum: 1,
+        },
+        {
+          id: 102,
+          title: "Breathe",
+          artist: "Pink Floyd",
+          album: "DSOTM",
+          stream_url: "u2",
+          artwork_url: "a2",
+          duration: 163,
+          tracknum: 2,
+        },
+      ] as any,
+    });
+
+    const input = makeInput({
+      type: "IntentRequest",
+      intent: {
+        name: "PlayTrackIntent",
+        slots: {
+          SearchQuery: { value: "Dark Side of the Moon by Pink Floyd" },
+        },
+      },
+    });
+
+    const response = await PlayTrackIntentHandler.handle(input);
+    const play = (response.directives as any[])[0] as any;
+
+    expect(play.type).toBe("AudioPlayer.Play");
+    const state = decodeToken(play.audioItem.stream.token);
+    expect(state.queue).toEqual([101, 102]);
+    expect(state.index).toBe(0);
+    // Should have called album search with just the title, not the full phrase
+    expect(mockedLms.search).toHaveBeenCalledWith(
+      "Dark Side of the Moon",
+      "album",
+    );
+  });
+
+  test("falls back to track search when no album matches", async () => {
+    mockedLms.search
+      .mockResolvedValueOnce({ results: [] }) // album search: no results
+      .mockResolvedValueOnce({
+        // track search: one result
+        results: [
+          {
+            id: 201,
+            title: "Comfortably Numb",
+            artist: "Pink Floyd",
+            album: "The Wall",
+            stream_url: "u1",
+            artwork_url: "a1",
+            duration: 382,
+            tracknum: 6,
+          },
+        ] as any,
+      });
+
+    const input = makeInput({
+      type: "IntentRequest",
+      intent: {
+        name: "PlayTrackIntent",
+        slots: { SearchQuery: { value: "Comfortably Numb" } },
+      },
+    });
+
+    const response = await PlayTrackIntentHandler.handle(input);
+    const play = (response.directives as any[])[0] as any;
+
+    expect(play.type).toBe("AudioPlayer.Play");
+    const state = decodeToken(play.audioItem.stream.token);
+    expect(state.queue).toEqual([201]);
   });
 });

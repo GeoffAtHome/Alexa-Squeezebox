@@ -21,7 +21,7 @@ import {
 } from "ask-sdk-core";
 import { Response, interfaces } from "ask-sdk-model";
 import * as lms from "./lmsClient";
-import { buildNowPlayingApl } from "./aplBuilder";
+import { buildNowPlayingApl, NowPlayingAplMeta } from "./aplBuilder";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +92,44 @@ function decodeQueueState(token?: string): QueueState | undefined {
   } catch {
     return undefined;
   }
+}
+
+function formatDuration(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function buildNowPlayingAplMeta(
+  track: lms.LmsTrack,
+  state?: QueueState,
+  offsetMs = 0,
+): NowPlayingAplMeta {
+  const durationMs = Math.max(0, Math.floor((track.duration ?? 0) * 1000));
+  const elapsedMs = Math.max(0, Math.floor(offsetMs));
+  const clampedElapsedMs = durationMs
+    ? Math.min(elapsedMs, durationMs)
+    : elapsedMs;
+
+  const progressPercent = durationMs
+    ? Math.min(100, Math.max(0, (clampedElapsedMs / durationMs) * 100))
+    : 0;
+
+  const trackPositionLabel = state
+    ? `Track ${state.index + 1} of ${state.queue.length}`
+    : track.tracknum
+      ? `Track ${track.tracknum}`
+      : "";
+
+  return {
+    elapsedLabel: formatDuration(clampedElapsedMs / 1000),
+    durationLabel: durationMs ? formatDuration(durationMs / 1000) : "--:--",
+    progressWidth: `${Math.round(progressPercent)}%`,
+    showProgress: durationMs > 0,
+    trackPositionLabel,
+    autoRefresh: durationMs > 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +286,18 @@ export const LaunchRequestHandler: RequestHandler = {
       .reprompt("What would you like to play?");
 
     if (supportsApl(input) && nowPlaying?.track) {
-      builder.addDirective(buildNowPlayingApl(nowPlaying.track));
+      const ap = audioPlayerState(input);
+      const state = decodeQueueState(ap?.token);
+      builder.addDirective(
+        buildNowPlayingApl(
+          nowPlaying.track,
+          buildNowPlayingAplMeta(
+            nowPlaying.track,
+            state,
+            ap?.offsetInMilliseconds ?? 0,
+          ),
+        ),
+      );
     }
 
     return builder.getResponse();
@@ -300,7 +349,12 @@ export const PlayTrackIntentHandler: RequestHandler = {
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(tracks[0]));
+      response.addDirective(
+        buildNowPlayingApl(
+          tracks[0],
+          buildNowPlayingAplMeta(tracks[0], { queue, index: 0 }, 0),
+        ),
+      );
     }
 
     return response.getResponse();
@@ -355,7 +409,12 @@ export const PlayAlbumIntentHandler: RequestHandler = {
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(tracks[0]));
+      response.addDirective(
+        buildNowPlayingApl(
+          tracks[0],
+          buildNowPlayingAplMeta(tracks[0], { queue, index: 0 }, 0),
+        ),
+      );
     }
 
     return response.getResponse();
@@ -405,7 +464,12 @@ export const PlayArtistIntentHandler: RequestHandler = {
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(tracks[0]));
+      response.addDirective(
+        buildNowPlayingApl(
+          tracks[0],
+          buildNowPlayingAplMeta(tracks[0], { queue, index: 0 }, 0),
+        ),
+      );
     }
 
     return response.getResponse();
@@ -486,7 +550,12 @@ export const ResumeIntentHandler: RequestHandler = {
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(track));
+      response.addDirective(
+        buildNowPlayingApl(
+          track,
+          buildNowPlayingAplMeta(track, state, offsetMs),
+        ),
+      );
     }
 
     return response.getResponse();
@@ -569,7 +638,12 @@ export const NextIntentHandler: RequestHandler = {
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(track));
+      response.addDirective(
+        buildNowPlayingApl(
+          track,
+          buildNowPlayingAplMeta(track, { queue: state.queue, index: idx }, 0),
+        ),
+      );
     }
 
     return response.getResponse();
@@ -626,10 +700,145 @@ export const PreviousIntentHandler: RequestHandler = {
       .withShouldEndSession(true);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(track));
+      response.addDirective(
+        buildNowPlayingApl(
+          track,
+          buildNowPlayingAplMeta(track, { queue: state.queue, index: idx }, 0),
+        ),
+      );
     }
 
     return response.getResponse();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// APL UserEvent controls (Echo Show touch buttons)
+// ---------------------------------------------------------------------------
+
+export const AplUserEventHandler: RequestHandler = {
+  canHandle(input) {
+    return (
+      input.requestEnvelope.request.type === "Alexa.Presentation.APL.UserEvent"
+    );
+  },
+  async handle(input): Promise<Response> {
+    const request = input.requestEnvelope.request as any;
+    const action = String(request.arguments?.[0] ?? "").toLowerCase();
+
+    if (action === "refreshprogress") {
+      const ap = audioPlayerState(input);
+      if (ap?.playerActivity !== "PLAYING") {
+        return input.responseBuilder.getResponse();
+      }
+
+      const state = decodeQueueState(ap?.token);
+      if (!state) {
+        return input.responseBuilder.getResponse();
+      }
+
+      const trackId = state.queue[state.index];
+      let track: lms.LmsTrack;
+      try {
+        track = await lms.getTrack(trackId);
+      } catch {
+        return input.responseBuilder.getResponse();
+      }
+
+      return input.responseBuilder
+        .addDirective(
+          buildNowPlayingApl(
+            track,
+            buildNowPlayingAplMeta(track, state, ap?.offsetInMilliseconds ?? 0),
+          ),
+        )
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    if (action === "pause") {
+      const ap = audioPlayerState(input);
+      const state = decodeQueueState(ap?.token);
+      const offsetMs = ap?.offsetInMilliseconds ?? 0;
+      void lms.reportPlayback(
+        "paused",
+        state ? state.queue[state.index] : undefined,
+        offsetMs,
+      );
+      return input.responseBuilder
+        .addDirective({ type: "AudioPlayer.Stop" })
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    if (action === "stop") {
+      void lms.reportPlayback("stopped");
+      return input.responseBuilder
+        .addDirective({ type: "AudioPlayer.Stop" })
+        .withShouldEndSession(true)
+        .getResponse();
+    }
+
+    if (action === "next" || action === "previous") {
+      const state = decodeQueueState(audioPlayerState(input)?.token);
+      if (!state) {
+        return input.responseBuilder
+          .speak("There isn't an active queue.")
+          .withShouldEndSession(true)
+          .getResponse();
+      }
+
+      const idx = action === "next" ? state.index + 1 : state.index - 1;
+      if (idx < 0 || idx >= state.queue.length) {
+        return input.responseBuilder
+          .speak(
+            action === "next"
+              ? "That's the end of the queue."
+              : "That's the start of the queue.",
+          )
+          .withShouldEndSession(true)
+          .getResponse();
+      }
+
+      const trackId = state.queue[idx];
+      let track: lms.LmsTrack;
+      try {
+        track = await lms.getTrack(trackId);
+      } catch {
+        return input.responseBuilder
+          .speak("Sorry, I couldn't load that track.")
+          .withShouldEndSession(true)
+          .getResponse();
+      }
+
+      const response = input.responseBuilder
+        .addDirective(
+          playDirective(
+            track,
+            "REPLACE_ALL",
+            undefined,
+            encodeQueueState(state.queue, idx),
+          ),
+        )
+        .withShouldEndSession(true);
+
+      if (supportsApl(input)) {
+        response.addDirective(
+          buildNowPlayingApl(
+            track,
+            buildNowPlayingAplMeta(
+              track,
+              { queue: state.queue, index: idx },
+              0,
+            ),
+          ),
+        );
+      }
+
+      return response.getResponse();
+    }
+
+    return input.responseBuilder.getResponse();
   },
 };
 
@@ -695,7 +904,18 @@ export const NowPlayingIntentHandler: RequestHandler = {
     const response = input.responseBuilder.speak(speech);
 
     if (supportsApl(input)) {
-      response.addDirective(buildNowPlayingApl(np.track));
+      const ap = audioPlayerState(input);
+      const state = decodeQueueState(ap?.token);
+      response.addDirective(
+        buildNowPlayingApl(
+          np.track,
+          buildNowPlayingAplMeta(
+            np.track,
+            state,
+            ap?.offsetInMilliseconds ?? 0,
+          ),
+        ),
+      );
     }
 
     return response.getResponse();

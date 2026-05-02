@@ -20,6 +20,7 @@ import {
   StopIntentHandler,
   NextIntentHandler,
   PreviousIntentHandler,
+  AplUserEventHandler,
   VolumeIntentHandler,
   NowPlayingIntentHandler,
   AudioPlayerHandlers,
@@ -44,6 +45,7 @@ export const handler = SkillBuilders.custom()
     StopIntentHandler,
     NextIntentHandler,
     PreviousIntentHandler,
+    AplUserEventHandler,
     // AudioPlayer & PlaybackController lifecycle events
     ...AudioPlayerHandlers,
     ...PlaybackControllerHandlers,

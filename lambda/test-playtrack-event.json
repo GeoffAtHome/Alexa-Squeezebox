@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "session": {
+    "new": false,
+    "sessionId": "SessionId.test-intent",
+    "application": { "applicationId": "amzn1.ask.skill.test-skill-id" },
+    "attributes": {},
+    "user": { "userId": "amzn1.ask.account.test-user" }
+  },
+  "context": {
+    "System": {
+      "application": { "applicationId": "amzn1.ask.skill.test-skill-id" },
+      "user": { "userId": "amzn1.ask.account.test-user" },
+      "device": {
+        "deviceId": "test-device-id",
+        "supportedInterfaces": {
+          "AudioPlayer": {},
+          "Alexa.Presentation.APL": {}
+        }
+      },
+      "apiEndpoint": "https://api.eu.amazonalexa.com",
+      "apiAccessToken": "test-token"
+    }
+  },
+  "request": {
+    "type": "IntentRequest",
+    "requestId": "EdwRequestId.test-play",
+    "timestamp": "2026-05-02T16:35:00Z",
+    "locale": "en-GB",
+    "intent": {
+      "name": "PlayTrackIntent",
+      "confirmationStatus": "NONE",
+      "slots": {
+        "SearchQuery": {
+          "name": "SearchQuery",
+          "value": "radiohead"
+        }
+      }
+    }
+  }
+}

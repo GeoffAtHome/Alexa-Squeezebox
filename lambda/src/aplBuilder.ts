@@ -57,15 +57,6 @@ export function buildNowPlayingApl(
 // Uses AlexaBackground + a centred card layout.
 // ---------------------------------------------------------------------------
 
-const ICON_PREVIOUS =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpolygon fill='white' points='30,32 52,16 52,48'/%3E%3Cpolygon fill='white' points='10,32 32,16 32,48'/%3E%3C/svg%3E";
-const ICON_PAUSE =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='14' y='12' width='12' height='40' fill='white'/%3E%3Crect x='38' y='12' width='12' height='40' fill='white'/%3E%3C/svg%3E";
-const ICON_STOP =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='16' y='16' width='32' height='32' fill='white'/%3E%3C/svg%3E";
-const ICON_NEXT =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpolygon fill='white' points='34,32 12,16 12,48'/%3E%3Cpolygon fill='white' points='54,32 32,16 32,48'/%3E%3C/svg%3E";
-
 const APL_DOCUMENT = {
   type: "APL",
   version: "1.8",
@@ -213,8 +204,9 @@ const APL_DOCUMENT = {
               {
                 type: "Container",
                 direction: "row",
-                spacing: "12dp",
+                spacing: "10dp",
                 paddingTop: "20dp",
+                justifyContent: "center",
                 items: [
                   {
                     type: "TouchWrapper",
@@ -255,18 +247,18 @@ const APL_DOCUMENT = {
                     item: {
                       type: "Container",
                       id: "btn-previous",
-                      width: "60dp",
-                      height: "60dp",
+                      width: "66dp",
+                      height: "54dp",
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: "#2A2A2A",
                       borderRadius: "10dp",
                       items: [
                         {
-                          type: "Image",
-                          source: ICON_PREVIOUS,
-                          width: "28dp",
-                          height: "28dp",
+                          type: "Text",
+                          text: "PREV",
+                          style: "textStyleBody2",
+                          color: "#FFFFFF",
                         },
                       ],
                     },
@@ -310,18 +302,18 @@ const APL_DOCUMENT = {
                     item: {
                       type: "Container",
                       id: "btn-pause",
-                      width: "60dp",
-                      height: "60dp",
+                      width: "66dp",
+                      height: "54dp",
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: "#2A2A2A",
                       borderRadius: "10dp",
                       items: [
                         {
-                          type: "Image",
-                          source: ICON_PAUSE,
-                          width: "28dp",
-                          height: "28dp",
+                          type: "Text",
+                          text: "PAUSE",
+                          style: "textStyleBody2",
+                          color: "#FFFFFF",
                         },
                       ],
                     },
@@ -365,18 +357,18 @@ const APL_DOCUMENT = {
                     item: {
                       type: "Container",
                       id: "btn-stop",
-                      width: "60dp",
-                      height: "60dp",
+                      width: "66dp",
+                      height: "54dp",
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: "#2A2A2A",
                       borderRadius: "10dp",
                       items: [
                         {
-                          type: "Image",
-                          source: ICON_STOP,
-                          width: "28dp",
-                          height: "28dp",
+                          type: "Text",
+                          text: "STOP",
+                          style: "textStyleBody2",
+                          color: "#FFFFFF",
                         },
                       ],
                     },
@@ -420,18 +412,18 @@ const APL_DOCUMENT = {
                     item: {
                       type: "Container",
                       id: "btn-next",
-                      width: "60dp",
-                      height: "60dp",
+                      width: "66dp",
+                      height: "54dp",
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: "#2A2A2A",
                       borderRadius: "10dp",
                       items: [
                         {
-                          type: "Image",
-                          source: ICON_NEXT,
-                          width: "28dp",
-                          height: "28dp",
+                          type: "Text",
+                          text: "NEXT",
+                          style: "textStyleBody2",
+                          color: "#FFFFFF",
                         },
                       ],
                     },

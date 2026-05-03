@@ -7,7 +7,8 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "clean": "rimraf dist",
-    "package": "npm run clean && npm run build && cd dist && zip -r ../lambda.zip .",
+    "package": "npm run clean && npm run build && powershell -NoProfile -Command \"if (Test-Path lambda.zip) { Remove-Item lambda.zip -Force }; Compress-Archive -Path dist,node_modules -DestinationPath lambda.zip\"",
+    "deploy": "npm run package && aws lambda update-function-code --function-name alexa-squeezebox --zip-file fileb://lambda.zip --region eu-west-1",
     "test": "jest"
   },
   "dependencies": {

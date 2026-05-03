@@ -11,6 +11,9 @@
  *   LMS_BASE_URL      – e.g. https://lms.yourdomain.com  (no trailing slash)
  *   LMS_API_TOKEN     – computed API token from plugin settings page
  *   LMS_PLAYER_ID     – target LMS player ID (from /alexa/players)
+ * Optional environment variables:
+ *   LMS_BASIC_AUTH_USER  – HTTP Basic auth username for LMS/reverse proxy
+ *   LMS_BASIC_AUTH_PASS  – HTTP Basic auth password for LMS/reverse proxy
  */
 
 import fetch from "node-fetch";
@@ -86,12 +89,39 @@ function getConfig() {
   const base = process.env.LMS_BASE_URL;
   const token = process.env.LMS_API_TOKEN;
   const playerId = process.env.LMS_PLAYER_ID;
+  const basicAuthUser = process.env.LMS_BASIC_AUTH_USER;
+  const basicAuthPass = process.env.LMS_BASIC_AUTH_PASS;
 
   if (!base) throw new Error("Missing env var: LMS_BASE_URL");
   if (!token) throw new Error("Missing env var: LMS_API_TOKEN");
   if (!playerId) throw new Error("Missing env var: LMS_PLAYER_ID");
 
-  return { base: base.replace(/\/$/, ""), token, playerId };
+  const parsed = new URL(base);
+  const embeddedUser = parsed.username
+    ? decodeURIComponent(parsed.username)
+    : undefined;
+  const embeddedPass = parsed.password
+    ? decodeURIComponent(parsed.password)
+    : "";
+
+  // Strip credentials from outgoing URL once extracted.
+  parsed.username = "";
+  parsed.password = "";
+
+  // Optional separate base URL for stream/artwork URLs (e.g. DNS-only hostname
+  // for audio streaming, bypassing Cloudflare proxy restrictions on media).
+  const streamBase =
+    (process.env.LMS_STREAM_BASE_URL ?? "").replace(/\/$/, "") ||
+    parsed.toString().replace(/\/$/, "");
+
+  return {
+    base: parsed.toString().replace(/\/$/, ""),
+    streamBase,
+    token,
+    playerId,
+    basicAuthUser: basicAuthUser ?? embeddedUser,
+    basicAuthPass: basicAuthPass ?? embeddedPass,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -102,12 +132,21 @@ async function apiGet<T>(
   path: string,
   params: Record<string, string> = {},
 ): Promise<T> {
-  const { base, token } = getConfig();
+  const { base, token, basicAuthUser, basicAuthPass } = getConfig();
   const qs = new URLSearchParams({ ...params, token });
   const url = `${base}${path}?${qs}`;
 
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (basicAuthUser !== undefined && basicAuthPass !== undefined) {
+    const basic = Buffer.from(
+      `${basicAuthUser}:${basicAuthPass}`,
+      "utf8",
+    ).toString("base64");
+    headers.Authorization = `Basic ${basic}`;
+  }
+
   const res = await fetch(url, {
-    headers: { Accept: "application/json" },
+    headers,
     // node-fetch follows redirects by default (needed for /alexa/stream)
   });
 
@@ -119,14 +158,17 @@ async function apiGet<T>(
   return res.json() as Promise<T>;
 }
 
-/** Prepend LMS_BASE_URL to relative paths returned by the plugin */
+/** Prepend base URLs to relative paths returned by the plugin.
+ *  stream_url and artwork_url use LMS_STREAM_BASE_URL when set, so that audio
+ *  streaming can bypass the Cloudflare proxy (DNS only) while API calls still
+ *  reach LMS via a separate proxied hostname. */
 function qualify(track: LmsTrack): LmsTrack {
-  const { base } = getConfig();
+  const { base, streamBase } = getConfig();
   return {
     ...track,
     stream_url: track.stream_url.startsWith("http")
       ? track.stream_url
-      : `${base}${track.stream_url}`,
+      : `${streamBase}${track.stream_url}`,
     artwork_url: track.artwork_url.startsWith("http")
       ? track.artwork_url
       : `${base}${track.artwork_url}`,

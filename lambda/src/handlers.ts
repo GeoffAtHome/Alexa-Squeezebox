@@ -12,6 +12,9 @@
  *     AMAZON.PreviousIntent, AMAZON.StopIntent ARE available in en-GB.
  *   - AudioPlayer interface is fully supported in the UK.
  *   - APL is supported on Echo Show devices in the UK.
+ *   - However, Alexa doesn't allow APL RenderDocument in the same response as
+ *     AudioPlayer directives, so playback responses must rely on AudioPlayer
+ *     metadata and native transport controls instead of custom APL buttons.
  */
 
 import {
@@ -53,6 +56,14 @@ function audioPlayerState(
   return handlerInput.requestEnvelope.context?.AudioPlayer as
     | interfaces.audioplayer.AudioPlayerState
     | undefined;
+}
+
+function requestType(handlerInput: HandlerInput): string {
+  return (handlerInput.requestEnvelope.request as any).type as string;
+}
+
+function isPlaybackControllerRequest(handlerInput: HandlerInput): boolean {
+  return requestType(handlerInput).startsWith("PlaybackController.");
 }
 
 interface QueueState {
@@ -162,6 +173,17 @@ function artistMatches(candidate: string, query: string): boolean {
   const a = candidate.toLowerCase();
   const b = query.toLowerCase();
   return a.includes(b) || b.includes(a);
+}
+
+function speechForLmsError(err: unknown): string {
+  const message = (err as Error)?.message ?? "";
+  if (message.includes("LMS API error 401")) {
+    return "I can't reach your music server because authentication failed. Please check the LMS password settings and Lambda basic-auth environment variables.";
+  }
+  if (message.includes("LMS API error 403")) {
+    return "I can't reach your music server because access was denied. Please check your API token and LMS plugin secret.";
+  }
+  return "Sorry, I couldn't reach the music server. Please try again in a moment.";
 }
 
 interface PlayResolution {
@@ -332,7 +354,16 @@ export const PlayTrackIntentHandler: RequestHandler = {
         .getResponse();
     }
 
-    const { tracks, speech } = await resolvePlayQuery(query);
+    let tracks: lms.LmsTrack[];
+    let speech: string;
+
+    try {
+      const resolved = await resolvePlayQuery(query);
+      tracks = resolved.tracks;
+      speech = resolved.speech;
+    } catch (err) {
+      return input.responseBuilder.speak(speechForLmsError(err)).getResponse();
+    }
 
     if (!tracks.length) {
       return input.responseBuilder
@@ -347,15 +378,6 @@ export const PlayTrackIntentHandler: RequestHandler = {
       .speak(speech)
       .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
-
-    if (supportsApl(input)) {
-      response.addDirective(
-        buildNowPlayingApl(
-          tracks[0],
-          buildNowPlayingAplMeta(tracks[0], { queue, index: 0 }, 0),
-        ),
-      );
-    }
 
     return response.getResponse();
   },
@@ -392,7 +414,16 @@ export const PlayAlbumIntentHandler: RequestHandler = {
 
     // resolvePlayQuery already tries album first, so this covers
     // "play the album Dark Side of the Moon by Pink Floyd" etc.
-    const { tracks, speech } = await resolvePlayQuery(query);
+    let tracks: lms.LmsTrack[];
+    let speech: string;
+
+    try {
+      const resolved = await resolvePlayQuery(query);
+      tracks = resolved.tracks;
+      speech = resolved.speech;
+    } catch (err) {
+      return input.responseBuilder.speak(speechForLmsError(err)).getResponse();
+    }
 
     if (!tracks.length) {
       return input.responseBuilder
@@ -407,15 +438,6 @@ export const PlayAlbumIntentHandler: RequestHandler = {
       .speak(speech)
       .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
-
-    if (supportsApl(input)) {
-      response.addDirective(
-        buildNowPlayingApl(
-          tracks[0],
-          buildNowPlayingAplMeta(tracks[0], { queue, index: 0 }, 0),
-        ),
-      );
-    }
 
     return response.getResponse();
   },
@@ -447,8 +469,13 @@ export const PlayArtistIntentHandler: RequestHandler = {
         .getResponse();
     }
 
-    const { results } = await lms.search(query, "track");
-    const tracks = results as lms.LmsTrack[];
+    let tracks: lms.LmsTrack[];
+    try {
+      const { results } = await lms.search(query, "track");
+      tracks = results as lms.LmsTrack[];
+    } catch (err) {
+      return input.responseBuilder.speak(speechForLmsError(err)).getResponse();
+    }
 
     if (!tracks.length) {
       return input.responseBuilder
@@ -463,15 +490,6 @@ export const PlayArtistIntentHandler: RequestHandler = {
       .addDirective(playDirective(tracks[0], "REPLACE_ALL", undefined, token))
       .withShouldEndSession(true);
 
-    if (supportsApl(input)) {
-      response.addDirective(
-        buildNowPlayingApl(
-          tracks[0],
-          buildNowPlayingAplMeta(tracks[0], { queue, index: 0 }, 0),
-        ),
-      );
-    }
-
     return response.getResponse();
   },
 };
@@ -482,8 +500,13 @@ export const PlayArtistIntentHandler: RequestHandler = {
 
 export const PauseIntentHandler: RequestHandler = {
   canHandle(input) {
-    const reqType = (input.requestEnvelope.request as any).type as string;
-    if (reqType === "PlaybackController.PauseCommand") return true;
+    const reqType = requestType(input);
+    if (
+      reqType === "PlaybackController.PauseCommandIssued" ||
+      reqType === "PlaybackController.PauseCommand"
+    ) {
+      return true;
+    }
     return (
       reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name ===
@@ -499,17 +522,27 @@ export const PauseIntentHandler: RequestHandler = {
       state ? state.queue[state.index] : undefined,
       offsetMs,
     );
-    return input.responseBuilder
-      .addDirective({ type: "AudioPlayer.Stop" })
-      .withShouldEndSession(true)
-      .getResponse();
+    const response = input.responseBuilder.addDirective({
+      type: "AudioPlayer.Stop",
+    });
+
+    if (!isPlaybackControllerRequest(input)) {
+      response.withShouldEndSession(true);
+    }
+
+    return response.getResponse();
   },
 };
 
 export const ResumeIntentHandler: RequestHandler = {
   canHandle(input) {
-    const reqType = (input.requestEnvelope.request as any).type as string;
-    if (reqType === "PlaybackController.PlayCommand") return true;
+    const reqType = requestType(input);
+    if (
+      reqType === "PlaybackController.PlayCommandIssued" ||
+      reqType === "PlaybackController.PlayCommand"
+    ) {
+      return true;
+    }
     return (
       reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name ===
@@ -521,6 +554,9 @@ export const ResumeIntentHandler: RequestHandler = {
     const ap = audioPlayerState(input);
     const state = decodeQueueState(ap?.token);
     if (!state) {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder.speak("Nothing to resume.").getResponse();
     }
 
@@ -532,6 +568,9 @@ export const ResumeIntentHandler: RequestHandler = {
     try {
       track = await lms.getTrack(trackId);
     } catch {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder.speak("Nothing to resume.").getResponse();
     }
 
@@ -545,17 +584,10 @@ export const ResumeIntentHandler: RequestHandler = {
 
     void lms.reportPlayback("playing", trackId, offsetMs);
 
-    const response = input.responseBuilder
-      .addDirective(directive)
-      .withShouldEndSession(true);
+    const response = input.responseBuilder.addDirective(directive);
 
-    if (supportsApl(input)) {
-      response.addDirective(
-        buildNowPlayingApl(
-          track,
-          buildNowPlayingAplMeta(track, state, offsetMs),
-        ),
-      );
+    if (!isPlaybackControllerRequest(input)) {
+      response.withShouldEndSession(true);
     }
 
     return response.getResponse();
@@ -591,8 +623,13 @@ export const StopIntentHandler: RequestHandler = {
 
 export const NextIntentHandler: RequestHandler = {
   canHandle(input) {
-    const reqType = (input.requestEnvelope.request as any).type as string;
-    if (reqType === "PlaybackController.NextCommand") return true;
+    const reqType = requestType(input);
+    if (
+      reqType === "PlaybackController.NextCommandIssued" ||
+      reqType === "PlaybackController.NextCommand"
+    ) {
+      return true;
+    }
     return (
       reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name === "AMAZON.NextIntent"
@@ -601,6 +638,9 @@ export const NextIntentHandler: RequestHandler = {
   async handle(input): Promise<Response> {
     const state = decodeQueueState(audioPlayerState(input)?.token);
     if (!state) {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder
         .speak("There isn't an active queue to skip.")
         .withShouldEndSession(true)
@@ -609,6 +649,9 @@ export const NextIntentHandler: RequestHandler = {
     const idx = state.index + 1;
 
     if (idx >= state.queue.length) {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder
         .speak("That's the end of the queue.")
         .withShouldEndSession(true)
@@ -620,30 +663,26 @@ export const NextIntentHandler: RequestHandler = {
     try {
       track = await lms.getTrack(trackId);
     } catch {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder
         .speak("Sorry, I couldn't find the next track.")
         .withShouldEndSession(true)
         .getResponse();
     }
 
-    const response = input.responseBuilder
-      .addDirective(
-        playDirective(
-          track,
-          "REPLACE_ALL",
-          undefined,
-          encodeQueueState(state.queue, idx),
-        ),
-      )
-      .withShouldEndSession(true);
+    const response = input.responseBuilder.addDirective(
+      playDirective(
+        track,
+        "REPLACE_ALL",
+        undefined,
+        encodeQueueState(state.queue, idx),
+      ),
+    );
 
-    if (supportsApl(input)) {
-      response.addDirective(
-        buildNowPlayingApl(
-          track,
-          buildNowPlayingAplMeta(track, { queue: state.queue, index: idx }, 0),
-        ),
-      );
+    if (!isPlaybackControllerRequest(input)) {
+      response.withShouldEndSession(true);
     }
 
     return response.getResponse();
@@ -652,8 +691,13 @@ export const NextIntentHandler: RequestHandler = {
 
 export const PreviousIntentHandler: RequestHandler = {
   canHandle(input) {
-    const reqType = (input.requestEnvelope.request as any).type as string;
-    if (reqType === "PlaybackController.PreviousCommand") return true;
+    const reqType = requestType(input);
+    if (
+      reqType === "PlaybackController.PreviousCommandIssued" ||
+      reqType === "PlaybackController.PreviousCommand"
+    ) {
+      return true;
+    }
     return (
       reqType === "IntentRequest" &&
       (input.requestEnvelope.request as any).intent.name ===
@@ -663,6 +707,9 @@ export const PreviousIntentHandler: RequestHandler = {
   async handle(input): Promise<Response> {
     const state = decodeQueueState(audioPlayerState(input)?.token);
     if (!state) {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder
         .speak("There isn't an active queue to go back in.")
         .withShouldEndSession(true)
@@ -671,6 +718,9 @@ export const PreviousIntentHandler: RequestHandler = {
     const idx = state.index - 1;
 
     if (idx < 0) {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder
         .speak("That's the start of the queue.")
         .withShouldEndSession(true)
@@ -682,30 +732,26 @@ export const PreviousIntentHandler: RequestHandler = {
     try {
       track = await lms.getTrack(trackId);
     } catch {
+      if (isPlaybackControllerRequest(input)) {
+        return input.responseBuilder.getResponse();
+      }
       return input.responseBuilder
         .speak("Sorry, I couldn't find the previous track.")
         .withShouldEndSession(true)
         .getResponse();
     }
 
-    const response = input.responseBuilder
-      .addDirective(
-        playDirective(
-          track,
-          "REPLACE_ALL",
-          undefined,
-          encodeQueueState(state.queue, idx),
-        ),
-      )
-      .withShouldEndSession(true);
+    const response = input.responseBuilder.addDirective(
+      playDirective(
+        track,
+        "REPLACE_ALL",
+        undefined,
+        encodeQueueState(state.queue, idx),
+      ),
+    );
 
-    if (supportsApl(input)) {
-      response.addDirective(
-        buildNowPlayingApl(
-          track,
-          buildNowPlayingAplMeta(track, { queue: state.queue, index: idx }, 0),
-        ),
-      );
+    if (!isPlaybackControllerRequest(input)) {
+      response.withShouldEndSession(true);
     }
 
     return response.getResponse();
@@ -811,7 +857,7 @@ export const AplUserEventHandler: RequestHandler = {
           .getResponse();
       }
 
-      const response = input.responseBuilder
+      return input.responseBuilder
         .addDirective(
           playDirective(
             track,
@@ -820,22 +866,8 @@ export const AplUserEventHandler: RequestHandler = {
             encodeQueueState(state.queue, idx),
           ),
         )
-        .withShouldEndSession(true);
-
-      if (supportsApl(input)) {
-        response.addDirective(
-          buildNowPlayingApl(
-            track,
-            buildNowPlayingAplMeta(
-              track,
-              { queue: state.queue, index: idx },
-              0,
-            ),
-          ),
-        );
-      }
-
-      return response.getResponse();
+        .withShouldEndSession(true)
+        .getResponse();
     }
 
     return input.responseBuilder.getResponse();

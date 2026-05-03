@@ -129,6 +129,29 @@ Set the required environment variables on the Lambda function:
 | `LMS_API_TOKEN` | Token generated in step 3                         |
 | `LMS_PLAYER_ID` | Player MAC address from `GET /alexa/players`      |
 
+If LMS is protected by HTTP Basic authentication (e.g. set via **Settings → Security**
+in the LMS web interface), add these two optional variables as well:
+
+| Variable              | Value                      |
+| --------------------- | -------------------------- |
+| `LMS_BASIC_AUTH_USER` | LMS web interface username |
+| `LMS_BASIC_AUTH_PASS` | LMS web interface password |
+
+When both are set, every Lambda → LMS request will include an `Authorization: Basic ...`
+header, satisfying the Basic auth challenge before the AlexaBridge token is checked.
+Leave them unset if your LMS is not behind Basic auth.
+
+You can also embed credentials in `LMS_BASE_URL` if preferred:
+
+`https://username:password@your-lms-domain.com`
+
+Lambda will extract those credentials and still call LMS without credentials in the final URL.
+
+If password protection is enabled and playback fails, verify one of these configurations is present:
+
+1. `LMS_BASIC_AUTH_USER` + `LMS_BASIC_AUTH_PASS`
+2. Credentials embedded in `LMS_BASE_URL`
+
 ### 5. Create the Alexa skill
 
 ```bash

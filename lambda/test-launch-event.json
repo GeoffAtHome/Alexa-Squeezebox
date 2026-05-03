@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "session": {
+    "new": true,
+    "sessionId": "SessionId.test-session",
+    "application": { "applicationId": "amzn1.ask.skill.test-skill-id" },
+    "attributes": {},
+    "user": { "userId": "amzn1.ask.account.test-user" }
+  },
+  "context": {
+    "System": {
+      "application": { "applicationId": "amzn1.ask.skill.test-skill-id" },
+      "user": { "userId": "amzn1.ask.account.test-user" },
+      "device": {
+        "deviceId": "test-device-id",
+        "supportedInterfaces": {
+          "Alexa.Presentation.APL": {}
+        }
+      },
+      "apiEndpoint": "https://api.eu.amazonalexa.com",
+      "apiAccessToken": "test-token"
+    }
+  },
+  "request": {
+    "type": "LaunchRequest",
+    "requestId": "EdwRequestId.test-launch",
+    "timestamp": "2026-05-02T16:30:00Z",
+    "locale": "en-GB"
+  }
+}

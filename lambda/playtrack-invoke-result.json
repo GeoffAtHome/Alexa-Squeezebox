@@ -1,0 +1,1 @@
+{"version":"1.0","response":{"outputSpeech":{"type":"SSML","ssml":"<speak>Sorry, I couldn't reach the music server. Please try again in a moment.</speak>"}},"userAgent":"ask-node/2.14.0 Node/v20.20.2","sessionAttributes":{}}

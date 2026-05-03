@@ -1,6 +1,7 @@
 import {
   AudioPlayerHandlers,
   NextIntentHandler,
+  PauseIntentHandler,
   PlayAlbumIntentHandler,
   PlayTrackIntentHandler,
   parseQueryForTest,
@@ -14,6 +15,7 @@ jest.mock("./lmsClient", () => ({
   getTrack: jest.fn(),
   nowPlaying: jest.fn(),
   control: jest.fn(),
+  reportPlayback: jest.fn(),
 }));
 
 jest.mock("./aplBuilder", () => ({
@@ -160,6 +162,7 @@ describe("handlers queue token flow", () => {
     const state = decodeToken(play.audioItem.stream.token);
     expect(state.queue).toEqual([1, 2, 3]);
     expect(state.index).toBe(0);
+    expect(response.directives).toHaveLength(1);
   });
 
   test("PlaybackNearlyFinished enqueues next track using token state", async () => {
@@ -200,7 +203,7 @@ describe("handlers queue token flow", () => {
     expect(nextState.index).toBe(1);
   });
 
-  test("NextCommand skips to next queued track", async () => {
+  test("NextCommandIssued skips to next queued track", async () => {
     const token = Buffer.from(
       JSON.stringify({ queue: [10, 20, 30], index: 0 }),
       "utf8",
@@ -218,7 +221,7 @@ describe("handlers queue token flow", () => {
     } as any);
 
     const response = await NextIntentHandler.handle(
-      makeInput({ type: "PlaybackController.NextCommand" }, token),
+      makeInput({ type: "PlaybackController.NextCommandIssued" }, token),
     );
 
     const play = (response.directives as any[])[0] as any;
@@ -228,6 +231,22 @@ describe("handlers queue token flow", () => {
     const state = decodeToken(play.audioItem.stream.token);
     expect(state.queue).toEqual([10, 20, 30]);
     expect(state.index).toBe(1);
+    expect(response.directives).toHaveLength(1);
+  });
+
+  test("PauseCommandIssued returns AudioPlayer.Stop only", async () => {
+    const token = Buffer.from(
+      JSON.stringify({ queue: [10, 20, 30], index: 0 }),
+      "utf8",
+    ).toString("base64url");
+
+    const response = await PauseIntentHandler.handle(
+      makeInput({ type: "PlaybackController.PauseCommandIssued" }, token),
+    );
+
+    expect(response.outputSpeech).toBeUndefined();
+    expect(response.directives).toEqual([{ type: "AudioPlayer.Stop" }]);
+    expect(response.shouldEndSession).toBeUndefined();
   });
 });
 
@@ -342,6 +361,7 @@ describe("PlayTrackIntent routes 'by Artist' query to album", () => {
       "Dark Side of the Moon",
       "album",
     );
+    expect(response.directives).toHaveLength(1);
   });
 
   test("falls back to track search when no album matches", async () => {

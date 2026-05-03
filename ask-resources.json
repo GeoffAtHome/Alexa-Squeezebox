@@ -24,7 +24,9 @@
             "environmentVariables": {
               "LMS_BASE_URL": "https://lms.yourdomain.com",
               "LMS_API_TOKEN": "<from-plugin-settings>",
-              "LMS_PLAYER_ID": "<from-alexa-players-endpoint>"
+              "LMS_PLAYER_ID": "<from-alexa-players-endpoint>",
+              "LMS_BASIC_AUTH_USER": "<optional-basic-auth-username>",
+              "LMS_BASIC_AUTH_PASS": "<optional-basic-auth-password>"
             }
           }
         }

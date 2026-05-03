@@ -56,6 +56,10 @@
             }
           ],
           "samples": [
+            "album {SearchQuery}",
+            "queue album {SearchQuery}",
+            "start album {SearchQuery}",
+            "play album called {SearchQuery}",
             "play the album {SearchQuery}",
             "play album {SearchQuery}",
             "put on the album {SearchQuery}",

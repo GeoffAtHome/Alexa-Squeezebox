@@ -301,7 +301,7 @@ export const LaunchRequestHandler: RequestHandler = {
 
     const speechText = nowPlaying?.is_playing
       ? `Squeezebox is playing ${nowPlaying.track?.title ?? "something"}. What would you like to do?`
-      : "Squeezebox is ready. You can say things like: play Radiohead, play the album OK Computer, or pause.";
+      : "Squeezebox is ready.";
 
     const builder = input.responseBuilder
       .speak(speechText)

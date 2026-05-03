@@ -30,6 +30,20 @@ import {
 } from "./handlers";
 
 export const handler = SkillBuilders.custom()
+  .addRequestInterceptors({
+    process(handlerInput) {
+      const req = handlerInput.requestEnvelope.request as any;
+      const intentName = req?.intent?.name;
+      console.log(
+        "AlexaRequest",
+        JSON.stringify({
+          type: req?.type,
+          intent: intentName,
+          locale: req?.locale,
+        }),
+      );
+    },
+  })
   .addRequestHandlers(
     LaunchRequestHandler,
     // Custom music intents (US built-ins not available in en-GB)
